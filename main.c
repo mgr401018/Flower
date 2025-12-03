@@ -128,6 +128,11 @@ bool cursor_over_exit_item(void) {
            cursorY <= menuTop && cursorY >= menuBottom;
 }
 
+// Utility to test if cursor is anywhere in the menu bar area
+bool cursor_in_menu_area(void) {
+    return cursorY <= menuTop && cursorY >= menuBottom;
+}
+
 // Helpers for flowchart hit testing
 static int hit_node_output(double x, double y) {
     // Make clicking the bottom connector easier: treat a small strip under
@@ -244,6 +249,11 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
     if (button == GLFW_MOUSE_BUTTON_RIGHT) {
         if (action == GLFW_PRESS) {
             rightMousePressed = 1;
+
+            // Don't place items if cursor is in the menu area
+            if (cursor_in_menu_area()) {
+                return;
+            }
 
             if (flowchartModeOn) {
                 // Create a new flowchart node at cursor of the currently selected type
@@ -819,9 +829,6 @@ int main(void) {
         // Clear the screen
         glClear(GL_COLOR_BUFFER_BIT);
         
-        // Draw menu bar first so it stays on top visually
-        drawMenu();
-        
         // Draw all previously created normal squares
         for (int i = 0; i < squareCount; i++) {
             drawSquareAt(squareX[i], squareY[i], squareIsRed[i]);
@@ -832,6 +839,9 @@ int main(void) {
         
         // Draw the triangle (always follows cursor)
         drawTriangle();
+
+        // Draw menu bar last so it stays on top visually and prevents accidental placement
+        drawMenu();
 
         // Swap front and back buffers
         glfwSwapBuffers(window);
