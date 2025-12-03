@@ -22,12 +22,19 @@ int squareCount = 0;
 #define MAX_NODES 100
 #define MAX_CONNECTIONS 200
 
+typedef enum {
+    NODE_NORMAL = 0,
+    NODE_START  = 1,  // only bottom output connector
+    NODE_END    = 2   // only top input connector
+} NodeType;
+
 typedef struct {
     double x;
     double y;
     float width;
     float height;
     int value;  // placeholder for a value carried by this node
+    NodeType type;
 } FlowNode;
 
 typedef struct {
@@ -44,25 +51,34 @@ int connectionCount = 0;
 // Flowchart interaction state
 int flowchartModeOn = 0;
 int pendingConnectionFrom = -1;  // index of node whose output is selected, or -1
+NodeType currentPlacementType = NODE_NORMAL; // which kind of node right-click places in Flow mode
+int logConnectionsToTerminal = 0;           // toggle for printing node info on new connections
 
 // Simple menu bar configuration (normalized device coordinates)
-// Full-width bar at the top, with three small menu items: "Color", "Flow", and "Exit"
+// Full-width bar at the top, with five small menu items: "Color", "Flow", "Start", "End", "Exit"
 const float menuTop = 1.0f;
 const float menuBottom = 0.90f;
 const float menuLeft = -1.0f;
 const float menuRight = 1.0f;
 
-// "Color" menu item area (smaller button on the left)
-const float colorItemLeft = -0.95f;
-const float colorItemRight = -0.55f;
+// Left to right: Color | Flow | Start | End | Log | Exit
+const float colorItemLeft  = -1.0f;
+const float colorItemRight = -0.666f;
 
-// "Flow" menu item area (center)
-const float flowItemLeft = -0.25f;
-const float flowItemRight = 0.25f;
+const float flowItemLeft   = -0.666f;
+const float flowItemRight  = -0.333f;
 
-// "Exit" menu item area (smaller button on the right)
-const float exitItemLeft = 0.55f;
-const float exitItemRight = 0.95f;
+const float startItemLeft  = -0.333f;
+const float startItemRight = 0.0f;
+
+const float endItemLeft    = 0.0f;
+const float endItemRight   = 0.333f;
+
+const float logItemLeft    = 0.333f;
+const float logItemRight   = 0.666f;
+
+const float exitItemLeft   = 0.666f;
+const float exitItemRight  = 1.0f;
 
 bool menuRedSquaresOn = false;
 
@@ -88,6 +104,24 @@ bool cursor_over_flow_item(void) {
            cursorY <= menuTop && cursorY >= menuBottom;
 }
 
+// Utility to test if cursor is over the "Start" menu item
+bool cursor_over_start_item(void) {
+    return cursorX >= startItemLeft && cursorX <= startItemRight &&
+           cursorY <= menuTop && cursorY >= menuBottom;
+}
+
+// Utility to test if cursor is over the "End" menu item
+bool cursor_over_end_item(void) {
+    return cursorX >= endItemLeft && cursorX <= endItemRight &&
+           cursorY <= menuTop && cursorY >= menuBottom;
+}
+
+// Utility to test if cursor is over the "Log" menu item
+bool cursor_over_log_item(void) {
+    return cursorX >= logItemLeft && cursorX <= logItemRight &&
+           cursorY <= menuTop && cursorY >= menuBottom;
+}
+
 // Utility to test if cursor is over the "Exit" menu item
 bool cursor_over_exit_item(void) {
     return cursorX >= exitItemLeft && cursorX <= exitItemRight &&
@@ -100,6 +134,10 @@ static int hit_node_output(double x, double y) {
     // the node as the clickable output area.
     const float verticalPadding = 0.06f;
     for (int i = 0; i < nodeCount; ++i) {
+        // END nodes have no output
+        if (nodes[i].type == NODE_END) {
+            continue;
+        }
         double cx = nodes[i].x;
         double cy = nodes[i].y - nodes[i].height * 0.5;
         double dx = x - cx;
@@ -115,6 +153,10 @@ static int hit_node_input(double x, double y) {
     // Same idea for the input: a small strip above the node counts as the input.
     const float verticalPadding = 0.06f;
     for (int i = 0; i < nodeCount; ++i) {
+        // START nodes have no input
+        if (nodes[i].type == NODE_START) {
+            continue;
+        }
         double cx = nodes[i].x;
         double cy = nodes[i].y + nodes[i].height * 0.5;
         double dx = x - cx;
@@ -126,6 +168,15 @@ static int hit_node_input(double x, double y) {
     return -1;
 }
 
+static const char* node_type_name(NodeType t) {
+    switch (t) {
+        case NODE_START:  return "START";
+        case NODE_END:    return "END";
+        case NODE_NORMAL: return "NORMAL";
+        default:          return "UNKNOWN";
+    }
+}
+
 // Mouse button callback
 void mouse_button_callback(GLFWwindow* window, int button, int action, int mods) {
     if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
@@ -135,6 +186,23 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
         } else if (cursor_over_flow_item()) {
             flowchartModeOn = !flowchartModeOn;
             pendingConnectionFrom = -1;
+        } else if (cursor_over_start_item() && flowchartModeOn) {
+            // Toggle START as the type to place with right-click
+            if (currentPlacementType == NODE_START) {
+                currentPlacementType = NODE_NORMAL;
+            } else {
+                currentPlacementType = NODE_START;
+            }
+        } else if (cursor_over_end_item() && flowchartModeOn) {
+            // Toggle END as the type to place with right-click
+            if (currentPlacementType == NODE_END) {
+                currentPlacementType = NODE_NORMAL;
+            } else {
+                currentPlacementType = NODE_END;
+            }
+        } else if (cursor_over_log_item()) {
+            // Toggle connection logging
+            logConnectionsToTerminal = !logConnectionsToTerminal;
         } else if (cursor_over_exit_item()) {
             glfwSetWindowShouldClose(window, GLFW_TRUE);
         } else if (flowchartModeOn) {
@@ -152,7 +220,21 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
                     connectionCount < MAX_CONNECTIONS) {
                     connections[connectionCount].fromNode = pendingConnectionFrom;
                     connections[connectionCount].toNode = inNode;
+                    int idx = connectionCount;
                     connectionCount++;
+
+                    if (logConnectionsToTerminal) {
+                        FlowNode *from = &nodes[connections[idx].fromNode];
+                        FlowNode *to   = &nodes[connections[idx].toNode];
+                        printf("New connection %d: from node %d (%s, x=%.2f, y=%.2f, value=%d) "
+                               "to node %d (%s, x=%.2f, y=%.2f, value=%d)\n",
+                               idx,
+                               connections[idx].fromNode, node_type_name(from->type),
+                               (float)from->x, (float)from->y, from->value,
+                               connections[idx].toNode,   node_type_name(to->type),
+                               (float)to->x,   (float)to->y,   to->value);
+                        fflush(stdout);
+                    }
                 }
                 pendingConnectionFrom = -1;
             }
@@ -164,7 +246,7 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
             rightMousePressed = 1;
 
             if (flowchartModeOn) {
-                // Create a new yellow flowchart node at cursor
+                // Create a new flowchart node at cursor of the currently selected type
                 if (nodeCount < MAX_NODES) {
                     FlowNode *n = &nodes[nodeCount];
                     n->x = cursorX;
@@ -172,6 +254,7 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
                     n->width = 0.35f;
                     n->height = 0.22f;
                     n->value = nodeCount;  // simple placeholder value
+                    n->type = currentPlacementType;
                     nodeCount++;
                 }
             } else {
@@ -262,29 +345,37 @@ void drawFlowNode(const FlowNode *n) {
     glVertex2f(n->x - n->width * 0.5f, n->y - n->height * 0.5f);
     glEnd();
 
-    // Input connector (top)
     float r = 0.03f;
-    float cx = (float)n->x;
-    float cy = (float)(n->y + n->height * 0.5f);
-    glColor3f(0.1f, 0.1f, 0.1f);
-    glBegin(GL_TRIANGLE_FAN);
-    glVertex2f(cx, cy);
-    for (int i = 0; i <= 20; ++i) {
-        float a = (float)i / 20.0f * 6.2831853f;
-        glVertex2f(cx + cosf(a) * r, cy + sinf(a) * r);
-    }
-    glEnd();
+    float cx;
+    float cy;
 
-    // Output connector (bottom)
-    cx = (float)n->x;
-    cy = (float)(n->y - n->height * 0.5f);
-    glBegin(GL_TRIANGLE_FAN);
-    glVertex2f(cx, cy);
-    for (int i = 0; i <= 20; ++i) {
-        float a = (float)i / 20.0f * 6.2831853f;
-        glVertex2f(cx + cosf(a) * r, cy + sinf(a) * r);
+    glColor3f(0.1f, 0.1f, 0.1f);
+
+    // Input connector (top) — not drawn for start nodes
+    if (n->type != NODE_START) {
+        cx = (float)n->x;
+        cy = (float)(n->y + n->height * 0.5f);
+        glBegin(GL_TRIANGLE_FAN);
+        glVertex2f(cx, cy);
+        for (int i = 0; i <= 20; ++i) {
+            float a = (float)i / 20.0f * 6.2831853f;
+            glVertex2f(cx + cosf(a) * r, cy + sinf(a) * r);
+        }
+        glEnd();
     }
-    glEnd();
+
+    // Output connector (bottom) — not drawn for end nodes
+    if (n->type != NODE_END) {
+        cx = (float)n->x;
+        cy = (float)(n->y - n->height * 0.5f);
+        glBegin(GL_TRIANGLE_FAN);
+        glVertex2f(cx, cy);
+        for (int i = 0; i <= 20; ++i) {
+            float a = (float)i / 20.0f * 6.2831853f;
+            glVertex2f(cx + cosf(a) * r, cy + sinf(a) * r);
+        }
+        glEnd();
+    }
 }
 
 // Draw all flowchart nodes and their connections
@@ -336,7 +427,7 @@ void drawMenu() {
     glVertex2f(menuLeft, menuBottom);
     glEnd();
 
-    // Draw small outlines for the "Color", "Flow" and "Exit" buttons (no big filled rectangles)
+    // Draw small outlines for the "Color", "Flow", "Start", "End", "Log" and "Exit" buttons (no big filled rectangles)
     glColor3f(0.7f, 0.7f, 0.7f);
     glBegin(GL_LINE_LOOP);
     glVertex2f(colorItemLeft, menuTop);
@@ -352,6 +443,26 @@ void drawMenu() {
     glVertex2f(flowItemLeft, menuBottom);
     glEnd();
 
+    glBegin(GL_LINE_LOOP);
+    glVertex2f(startItemLeft, menuTop);
+    glVertex2f(startItemRight, menuTop);
+    glVertex2f(startItemRight, menuBottom);
+    glVertex2f(startItemLeft, menuBottom);
+    glEnd();
+
+    glBegin(GL_LINE_LOOP);
+    glVertex2f(endItemLeft, menuTop);
+    glVertex2f(endItemRight, menuTop);
+    glVertex2f(endItemRight, menuBottom);
+    glVertex2f(endItemLeft, menuBottom);
+    glEnd();
+
+    glBegin(GL_LINE_LOOP);
+    glVertex2f(logItemLeft, menuTop);
+    glVertex2f(logItemRight, menuTop);
+    glVertex2f(logItemRight, menuBottom);
+    glVertex2f(logItemLeft, menuBottom);
+    glEnd();
     glBegin(GL_LINE_LOOP);
     glVertex2f(exitItemLeft, menuTop);
     glVertex2f(exitItemRight, menuTop);
@@ -422,7 +533,7 @@ void drawMenu() {
     glVertex2f(x + w,       textY - h * 0.5f);
     glEnd();
 
-    // Draw "Flow" label in the center button
+    // Draw "Flow" label
     if (flowchartModeOn) {
         glColor3f(0.2f, 1.0f, 0.2f);  // green when flowchart mode ON
     } else {
@@ -478,6 +589,161 @@ void drawMenu() {
     glVertex2f(x2, yBot);
     glVertex2f(x3, yTop);
     x = x3 + w * 0.2f;
+    glEnd();
+
+    // Draw "Start" label (highlighted when START placement is active)
+    if (currentPlacementType == NODE_START) {
+        glColor3f(1.0f, 1.0f, 0.2f);  // bright yellow when active
+    } else {
+        glColor3f(0.6f, 0.6f, 0.4f);  // dimmer when inactive
+    }
+    textY = (menuTop + menuBottom) * 0.5f;
+    x = startItemLeft + 0.03f;
+    h = (menuTop - menuBottom) * 0.5f;
+    w = h * 0.5f;
+
+    glBegin(GL_LINES);
+    // "S"
+    glVertex2f(x + w,       textY + h * 0.5f);
+    glVertex2f(x,           textY + h * 0.5f);
+    glVertex2f(x,           textY + h * 0.5f);
+    glVertex2f(x,           textY);
+    glVertex2f(x,           textY);
+    glVertex2f(x + w,       textY);
+    glVertex2f(x + w,       textY);
+    glVertex2f(x + w,       textY - h * 0.5f);
+    glVertex2f(x + w,       textY - h * 0.5f);
+    glVertex2f(x,           textY - h * 0.5f);
+    x += w * 1.3f;
+
+    // "T"
+    glVertex2f(x,           textY + h * 0.5f);
+    glVertex2f(x + w,       textY + h * 0.5f);
+    glVertex2f(x + w * 0.5f,textY + h * 0.5f);
+    glVertex2f(x + w * 0.5f,textY - h * 0.5f);
+    x += w * 1.2f;
+
+    // "A"
+    float ax0 = x;
+    float ax1 = x + w * 0.5f;
+    float ax2 = x + w;
+    float ayTop = textY + h * 0.5f;
+    float ayBot = textY - h * 0.5f;
+    float ayMid = textY;
+    glVertex2f(ax0, ayBot);
+    glVertex2f(ax1, ayTop);
+    glVertex2f(ax1, ayTop);
+    glVertex2f(ax2, ayBot);
+    glVertex2f(ax0 + w * 0.2f, ayMid);
+    glVertex2f(ax2 - w * 0.2f, ayMid);
+    x += w * 1.5f;
+
+    // "R"
+    glVertex2f(x,           textY - h * 0.5f);
+    glVertex2f(x,           textY + h * 0.5f);
+    glVertex2f(x,           textY + h * 0.5f);
+    glVertex2f(x + w,       textY + h * 0.5f);
+    glVertex2f(x + w,       textY + h * 0.5f);
+    glVertex2f(x + w,       textY);
+    glVertex2f(x + w,       textY);
+    glVertex2f(x,           textY);
+    glVertex2f(x,           textY);
+    glVertex2f(x + w,       textY - h * 0.5f);
+    x += w * 1.3f;
+
+    // "T"
+    glVertex2f(x,           textY + h * 0.5f);
+    glVertex2f(x + w,       textY + h * 0.5f);
+    glVertex2f(x + w * 0.5f,textY + h * 0.5f);
+    glVertex2f(x + w * 0.5f,textY - h * 0.5f);
+    glEnd();
+
+    // Draw "End" label (highlighted when END placement is active)
+    if (currentPlacementType == NODE_END) {
+        glColor3f(1.0f, 0.4f, 0.4f);  // brighter when active
+    } else {
+        glColor3f(0.7f, 0.5f, 0.5f);  // dimmer when inactive
+    }
+    textY = (menuTop + menuBottom) * 0.5f;
+    x = endItemLeft + 0.06f;
+    h = (menuTop - menuBottom) * 0.5f;
+    w = h * 0.5f;
+
+    glBegin(GL_LINES);
+    // "E"
+    glVertex2f(x + w,       textY + h * 0.5f);
+    glVertex2f(x,           textY + h * 0.5f);
+    glVertex2f(x,           textY + h * 0.5f);
+    glVertex2f(x,           textY - h * 0.5f);
+    glVertex2f(x,           textY);
+    glVertex2f(x + w * 0.8f,textY);
+    glVertex2f(x,           textY - h * 0.5f);
+    glVertex2f(x + w,       textY - h * 0.5f);
+    x += w * 1.3f;
+
+    // "N"
+    float nx0 = x;
+    float nx1 = x + w;
+    glVertex2f(nx0,         textY - h * 0.5f);
+    glVertex2f(nx0,         textY + h * 0.5f);
+    glVertex2f(nx0,         textY + h * 0.5f);
+    glVertex2f(nx1,         textY - h * 0.5f);
+    glVertex2f(nx1,         textY - h * 0.5f);
+    glVertex2f(nx1,         textY + h * 0.5f);
+    x += w * 1.3f;
+
+    // "D"
+    glVertex2f(x,           textY - h * 0.5f);
+    glVertex2f(x,           textY + h * 0.5f);
+    glVertex2f(x,           textY + h * 0.5f);
+    glVertex2f(x + w * 0.7f,textY + h * 0.25f);
+    glVertex2f(x + w * 0.7f,textY + h * 0.25f);
+    glVertex2f(x + w * 0.7f,textY - h * 0.25f);
+    glVertex2f(x + w * 0.7f,textY - h * 0.25f);
+    glVertex2f(x,           textY - h * 0.5f);
+    glEnd();
+
+    // Draw "Log" label
+    if (logConnectionsToTerminal) {
+        glColor3f(0.2f, 1.0f, 0.8f);  // highlighted when ON
+    } else {
+        glColor3f(0.7f, 0.7f, 0.7f);  // dim when OFF
+    }
+    textY = (menuTop + menuBottom) * 0.5f;
+    x = logItemLeft + 0.06f;
+    h = (menuTop - menuBottom) * 0.5f;
+    w = h * 0.5f;
+
+    glBegin(GL_LINES);
+    // "L"
+    glVertex2f(x,           textY + h * 0.5f);
+    glVertex2f(x,           textY - h * 0.5f);
+    glVertex2f(x,           textY - h * 0.5f);
+    glVertex2f(x + w,       textY - h * 0.5f);
+    x += w * 1.2f;
+
+    // "O"
+    glVertex2f(x,           textY + h * 0.5f);
+    glVertex2f(x + w,       textY + h * 0.5f);
+    glVertex2f(x + w,       textY + h * 0.5f);
+    glVertex2f(x + w,       textY - h * 0.5f);
+    glVertex2f(x + w,       textY - h * 0.5f);
+    glVertex2f(x,           textY - h * 0.5f);
+    glVertex2f(x,           textY - h * 0.5f);
+    glVertex2f(x,           textY + h * 0.5f);
+    x += w * 1.3f;
+
+    // "G"
+    glVertex2f(x + w,       textY + h * 0.5f);
+    glVertex2f(x,           textY + h * 0.5f);
+    glVertex2f(x,           textY + h * 0.5f);
+    glVertex2f(x,           textY - h * 0.5f);
+    glVertex2f(x,           textY - h * 0.5f);
+    glVertex2f(x + w,       textY - h * 0.5f);
+    glVertex2f(x + w,       textY - h * 0.5f);
+    glVertex2f(x + w,       textY);
+    glVertex2f(x + w,       textY);
+    glVertex2f(x + w * 0.6f,textY);
     glEnd();
 
     // Draw "Exit" label in the right button
@@ -539,6 +805,9 @@ int main(void) {
     // Make the window's context current
     glfwMakeContextCurrent(window);
     
+    // White background
+    glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
+
     // Set the cursor position callback
     glfwSetCursorPosCallback(window, cursor_position_callback);
     
