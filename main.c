@@ -14,6 +14,13 @@
 // // Scroll offset for vertical panning
 // double scrollOffsetY = 0.0;
 
+// // Circular button configuration (top-left corner)
+// const float buttonRadius = 0.05f;
+// const float button1X = -0.9f;
+// const float button1Y = 0.9f;
+// const float button2X = -0.75f;
+// const float button2Y = 0.9f;
+
 // // Flowchart node and connection data
 // #define MAX_NODES 100
 // #define MAX_CONNECTIONS 200
@@ -84,6 +91,13 @@
 //            cursorY <= itemY && cursorY >= itemY - menuItemHeight;
 // }
 
+// // Check if cursor is over a circular button
+// bool cursor_over_button(float buttonX, float buttonY) {
+//     float dx = cursorX - buttonX;
+//     float dy = cursorY - buttonY;
+//     return sqrt(dx*dx + dy*dy) <= buttonRadius;
+// }
+
 // // Find which connection (line) the cursor is near
 // static int hit_connection(double x, double y, float threshold) {
 //     for (int i = 0; i < connectionCount; ++i) {
@@ -127,16 +141,16 @@
 //     FlowNode *from = &nodes[oldConn.fromNode];
 //     FlowNode *to = &nodes[oldConn.toNode];
     
-//     // Calculate vertical spacing - place new node between from and to
-//     double spacing = 0.4;  // Distance between nodes
+//     // Fixed vertical spacing for consistent connection lengths
+//     double fixedSpacing = 0.5;  // Fixed distance between nodes
     
 //     // Store the original Y position of the "to" node before we modify anything
 //     double originalToY = to->y;
     
-//     // Create new node positioned vertically between from and to
+//     // Create new node positioned at fixed spacing below the "from" node
 //     FlowNode *newNode = &nodes[nodeCount];
 //     newNode->x = from->x;  // Keep same X position for vertical flow
-//     newNode->y = (from->y + to->y) / 2.0;  // Midpoint vertically
+//     newNode->y = from->y - fixedSpacing;  // Fixed spacing from parent
 //     newNode->width = 0.35f;
 //     newNode->height = 0.22f;
 //     newNode->value = nodeCount;
@@ -144,12 +158,10 @@
 //     int newNodeIndex = nodeCount;
 //     nodeCount++;
     
-//     // Push the "to" node and all nodes below it further down
-//     // Use the ORIGINAL position for comparison
-//     double pushAmount = spacing;
+//     // Push the "to" node and all nodes below it further down by the same fixed spacing
 //     for (int i = 0; i < nodeCount; ++i) {
 //         if (nodes[i].y <= originalToY && i != newNodeIndex) {
-//             nodes[i].y -= pushAmount;
+//             nodes[i].y -= fixedSpacing;
 //         }
 //     }
     
@@ -170,23 +182,18 @@
 //     // Calculate world-space cursor position (accounting for scroll)
 //     double worldCursorY = cursorY - scrollOffsetY;
     
-//     if (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_PRESS) {
-//         // Check if we're clicking on a connection (use world-space coordinates)
-//         int connIndex = hit_connection(cursorX, worldCursorY, 0.05f);
-        
-//         if (connIndex >= 0) {
-//             // Open popup menu at cursor position (store world-space coordinates)
-//             popupMenu.active = true;
-//             popupMenu.x = cursorX;
-//             popupMenu.y = worldCursorY;
-//             popupMenu.connectionIndex = connIndex;
-//         } else {
-//             // Close menu if clicking elsewhere
-//             popupMenu.active = false;
-//         }
-//     }
-    
 //     if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
+//         // Check if clicking on buttons (buttons are in screen space, not world space)
+//         if (cursor_over_button(button1X, button1Y)) {
+//             // Blue button clicked - do nothing for now
+//             return;
+//         }
+//         if (cursor_over_button(button2X, button2Y)) {
+//             // Yellow button clicked - do nothing for now
+//             return;
+//         }
+        
+//         // Check popup menu interaction
 //         if (popupMenu.active) {
 //             // Check which menu item was clicked (menu is in world space)
 //             float menuX = (float)popupMenu.x;
@@ -206,9 +213,27 @@
 //             }
 //         }
 //     }
+    
+//     if (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_PRESS) {
+//         // Check if we're clicking on a connection (use world-space coordinates)
+//         int connIndex = hit_connection(cursorX, worldCursorY, 0.05f);
+        
+//         if (connIndex >= 0) {
+//             // Open popup menu at cursor position (store world-space coordinates)
+//             popupMenu.active = true;
+//             popupMenu.x = cursorX;
+//             popupMenu.y = worldCursorY;
+//             popupMenu.connectionIndex = connIndex;
+//         } else {
+//             // Close menu if clicking elsewhere
+//             popupMenu.active = false;
+//         }
+//     }
 // }
 
 
+
+// void drawPopupMenu();  // Forward declaration
 
 // void drawFlowNode(const FlowNode *n) {
 //     // Node body color based on type
@@ -443,7 +468,54 @@
 //     glEnd();
 // }
 
+// void drawButtons() {
+//     // Draw button 1 (blue)
+//     glColor3f(0.2f, 0.4f, 0.9f);
+//     glBegin(GL_TRIANGLE_FAN);
+//     glVertex2f(button1X, button1Y);
+//     for (int i = 0; i <= 20; ++i) {
+//         float angle = (float)i / 20.0f * 6.2831853f;
+//         glVertex2f(button1X + cosf(angle) * buttonRadius, 
+//                    button1Y + sinf(angle) * buttonRadius);
+//     }
+//     glEnd();
+    
+//     // Draw button 1 border
+//     glColor3f(0.1f, 0.2f, 0.5f);
+//     glBegin(GL_LINE_LOOP);
+//     for (int i = 0; i <= 20; ++i) {
+//         float angle = (float)i / 20.0f * 6.2831853f;
+//         glVertex2f(button1X + cosf(angle) * buttonRadius, 
+//                    button1Y + sinf(angle) * buttonRadius);
+//     }
+//     glEnd();
+    
+//     // Draw button 2 (yellow)
+//     glColor3f(0.95f, 0.9f, 0.25f);
+//     glBegin(GL_TRIANGLE_FAN);
+//     glVertex2f(button2X, button2Y);
+//     for (int i = 0; i <= 20; ++i) {
+//         float angle = (float)i / 20.0f * 6.2831853f;
+//         glVertex2f(button2X + cosf(angle) * buttonRadius, 
+//                    button2Y + sinf(angle) * buttonRadius);
+//     }
+//     glEnd();
+    
+//     // Draw button 2 border
+//     glColor3f(0.5f, 0.5f, 0.1f);
+//     glBegin(GL_LINE_LOOP);
+//     for (int i = 0; i <= 20; ++i) {
+//         float angle = (float)i / 20.0f * 6.2831853f;
+//         glVertex2f(button2X + cosf(angle) * buttonRadius, 
+//                    button2Y + sinf(angle) * buttonRadius);
+//     }
+//     glEnd();
+// }
+
 // void initialize_flowchart() {
+//     // Fixed spacing between all nodes
+//     double fixedSpacing = 0.5;
+    
 //     // Create START node
 //     nodes[0].x = 0.0;
 //     nodes[0].y = 0.6;
@@ -452,9 +524,9 @@
 //     nodes[0].value = 0;
 //     nodes[0].type = NODE_START;
     
-//     // Create END node with more spacing
+//     // Create END node with fixed spacing from START
 //     nodes[1].x = 0.0;
-//     nodes[1].y = -0.2;
+//     nodes[1].y = 0.6 - fixedSpacing;  // Fixed spacing from START
 //     nodes[1].width = 0.35f;
 //     nodes[1].height = 0.22f;
 //     nodes[1].value = 1;
@@ -501,6 +573,9 @@
 //         hoveredConnection = hit_connection(cursorX, worldCursorY, 0.05f);
         
 //         drawFlowchart();
+        
+//         // Draw buttons in screen space (not affected by scroll)
+//         drawButtons();
 
 //         glfwSwapBuffers(window);
 //         glfwPollEvents();
@@ -525,6 +600,12 @@ int hoveredConnection = -1;
 
 // Scroll offset for vertical panning
 double scrollOffsetY = 0.0;
+
+// Circular button configuration (top-left corner, vertically aligned)
+const float buttonRadius = 0.04f;
+const float buttonX = -0.95f;  // Fixed X position for both buttons
+const float saveButtonY = 0.9f;   // Blue save button
+const float loadButtonY = 0.8f;   // Yellow load button
 
 // Flowchart node and connection data
 #define MAX_NODES 100
@@ -596,6 +677,17 @@ bool cursor_over_menu_item(double menuX, double menuY, int itemIndex) {
            cursorY <= itemY && cursorY >= itemY - menuItemHeight;
 }
 
+// Check if cursor is over a circular button (with aspect ratio correction)
+bool cursor_over_button(float buttonX, float buttonY, GLFWwindow* window) {
+    int width, height;
+    glfwGetWindowSize(window, &width, &height);
+    float aspectRatio = (float)width / (float)height;
+    
+    float dx = (cursorX - buttonX) * aspectRatio;
+    float dy = cursorY - buttonY;
+    return sqrt(dx*dx + dy*dy) <= buttonRadius;
+}
+
 // Find which connection (line) the cursor is near
 static int hit_connection(double x, double y, float threshold) {
     for (int i = 0; i < connectionCount; ++i) {
@@ -629,7 +721,120 @@ static int hit_connection(double x, double y, float threshold) {
     return -1;
 }
 
-// Insert a node into an existing connection
+// Save flowchart as adjacency matrix
+void save_flowchart(const char* filename) {
+    FILE* file = fopen(filename, "w");
+    if (!file) {
+        fprintf(stderr, "Failed to open file for writing: %s\n", filename);
+        return;
+    }
+    
+    // Write header
+    fprintf(file, "# Flowchart adjacency matrix\n");
+    fprintf(file, "# Nodes: %d\n", nodeCount);
+    fprintf(file, "%d\n", nodeCount);
+    
+    // Create adjacency matrix
+    for (int i = 0; i < nodeCount; i++) {
+        for (int j = 0; j < nodeCount; j++) {
+            int connected = 0;
+            // Check if there's a connection from i to j
+            for (int k = 0; k < connectionCount; k++) {
+                if (connections[k].fromNode == i && connections[k].toNode == j) {
+                    connected = 1;
+                    break;
+                }
+            }
+            fprintf(file, "%d", connected);
+            if (j < nodeCount - 1) fprintf(file, " ");
+        }
+        fprintf(file, "\n");
+    }
+    
+    // Write node data
+    fprintf(file, "# Node data: x y width height value type\n");
+    for (int i = 0; i < nodeCount; i++) {
+        fprintf(file, "%.6f %.6f %.6f %.6f %d %d\n",
+                nodes[i].x, nodes[i].y, nodes[i].width, nodes[i].height,
+                nodes[i].value, (int)nodes[i].type);
+    }
+    
+    fclose(file);
+    printf("Flowchart saved to %s\n", filename);
+}
+
+// Load flowchart from adjacency matrix
+void load_flowchart(const char* filename) {
+    FILE* file = fopen(filename, "r");
+    if (!file) {
+        fprintf(stderr, "Failed to open file for reading: %s\n", filename);
+        return;
+    }
+    
+    // Skip comment lines and read node count
+    char line[256];
+    int loadedNodeCount = 0;
+    while (fgets(line, sizeof(line), file)) {
+        if (line[0] != '#') {
+            sscanf(line, "%d", &loadedNodeCount);
+            break;
+        }
+    }
+    
+    if (loadedNodeCount <= 0 || loadedNodeCount > MAX_NODES) {
+        fprintf(stderr, "Invalid node count: %d\n", loadedNodeCount);
+        fclose(file);
+        return;
+    }
+    
+    // Read adjacency matrix
+    int adjMatrix[MAX_NODES][MAX_NODES] = {0};
+    for (int i = 0; i < loadedNodeCount; i++) {
+        for (int j = 0; j < loadedNodeCount; j++) {
+            if (fscanf(file, "%d", &adjMatrix[i][j]) != 1) {
+                fprintf(stderr, "Error reading adjacency matrix\n");
+                fclose(file);
+                return;
+            }
+        }
+    }
+    
+    // Skip comment line
+    while (fgets(line, sizeof(line), file)) {
+        if (line[0] == '#') break;
+    }
+    
+    // Read node data
+    nodeCount = 0;
+    for (int i = 0; i < loadedNodeCount; i++) {
+        int nodeType;
+        if (fscanf(file, "%lf %lf %f %f %d %d",
+                   &nodes[i].x, &nodes[i].y, &nodes[i].width, &nodes[i].height,
+                   &nodes[i].value, &nodeType) != 6) {
+            fprintf(stderr, "Error reading node data\n");
+            fclose(file);
+            return;
+        }
+        nodes[i].type = (NodeType)nodeType;
+        nodeCount++;
+    }
+    
+    // Rebuild connections from adjacency matrix
+    connectionCount = 0;
+    for (int i = 0; i < nodeCount; i++) {
+        for (int j = 0; j < nodeCount; j++) {
+            if (adjMatrix[i][j] && connectionCount < MAX_CONNECTIONS) {
+                connections[connectionCount].fromNode = i;
+                connections[connectionCount].toNode = j;
+                connectionCount++;
+            }
+        }
+    }
+    
+    fclose(file);
+    printf("Flowchart loaded from %s (%d nodes, %d connections)\n", 
+           filename, nodeCount, connectionCount);
+}
 void insert_node_in_connection(int connIndex, NodeType nodeType) {
     if (nodeCount >= MAX_NODES || connectionCount >= MAX_CONNECTIONS) {
         return;
@@ -674,29 +879,25 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
 
 // Mouse button callback
 void mouse_button_callback(GLFWwindow* window, int button, int action, int mods) {
-    (void)window;  // Mark as intentionally unused
     (void)mods;    // Mark as intentionally unused
     
     // Calculate world-space cursor position (accounting for scroll)
     double worldCursorY = cursorY - scrollOffsetY;
     
-    if (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_PRESS) {
-        // Check if we're clicking on a connection (use world-space coordinates)
-        int connIndex = hit_connection(cursorX, worldCursorY, 0.05f);
-        
-        if (connIndex >= 0) {
-            // Open popup menu at cursor position (store world-space coordinates)
-            popupMenu.active = true;
-            popupMenu.x = cursorX;
-            popupMenu.y = worldCursorY;
-            popupMenu.connectionIndex = connIndex;
-        } else {
-            // Close menu if clicking elsewhere
-            popupMenu.active = false;
-        }
-    }
-    
     if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
+        // Check if clicking on buttons (buttons are in screen space, not world space)
+        if (cursor_over_button(buttonX, saveButtonY, window)) {
+            // Blue save button clicked
+            save_flowchart("flowchart.txt");
+            return;
+        }
+        if (cursor_over_button(buttonX, loadButtonY, window)) {
+            // Yellow load button clicked
+            load_flowchart("flowchart.txt");
+            return;
+        }
+        
+        // Check popup menu interaction
         if (popupMenu.active) {
             // Check which menu item was clicked (menu is in world space)
             float menuX = (float)popupMenu.x;
@@ -716,9 +917,27 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
             }
         }
     }
+    
+    if (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_PRESS) {
+        // Check if we're clicking on a connection (use world-space coordinates)
+        int connIndex = hit_connection(cursorX, worldCursorY, 0.05f);
+        
+        if (connIndex >= 0) {
+            // Open popup menu at cursor position (store world-space coordinates)
+            popupMenu.active = true;
+            popupMenu.x = cursorX;
+            popupMenu.y = worldCursorY;
+            popupMenu.connectionIndex = connIndex;
+        } else {
+            // Close menu if clicking elsewhere
+            popupMenu.active = false;
+        }
+    }
 }
 
 
+
+void drawPopupMenu();  // Forward declaration
 
 void drawFlowNode(const FlowNode *n) {
     // Node body color based on type
@@ -953,6 +1172,54 @@ void drawPopupMenu() {
     glEnd();
 }
 
+void drawButtons() {
+    int width, height;
+    glfwGetWindowSize(glfwGetCurrentContext(), &width, &height);
+    float aspectRatio = (float)width / (float)height;
+    
+    // Draw save button (blue)
+    glColor3f(0.2f, 0.4f, 0.9f);
+    glBegin(GL_TRIANGLE_FAN);
+    glVertex2f(buttonX, saveButtonY);
+    for (int i = 0; i <= 20; ++i) {
+        float angle = (float)i / 20.0f * 6.2831853f;
+        glVertex2f(buttonX + cosf(angle) * buttonRadius / aspectRatio, 
+                   saveButtonY + sinf(angle) * buttonRadius);
+    }
+    glEnd();
+    
+    // Draw save button border
+    glColor3f(0.1f, 0.2f, 0.5f);
+    glBegin(GL_LINE_LOOP);
+    for (int i = 0; i <= 20; ++i) {
+        float angle = (float)i / 20.0f * 6.2831853f;
+        glVertex2f(buttonX + cosf(angle) * buttonRadius / aspectRatio, 
+                   saveButtonY + sinf(angle) * buttonRadius);
+    }
+    glEnd();
+    
+    // Draw load button (yellow)
+    glColor3f(0.95f, 0.9f, 0.25f);
+    glBegin(GL_TRIANGLE_FAN);
+    glVertex2f(buttonX, loadButtonY);
+    for (int i = 0; i <= 20; ++i) {
+        float angle = (float)i / 20.0f * 6.2831853f;
+        glVertex2f(buttonX + cosf(angle) * buttonRadius / aspectRatio, 
+                   loadButtonY + sinf(angle) * buttonRadius);
+    }
+    glEnd();
+    
+    // Draw load button border
+    glColor3f(0.5f, 0.5f, 0.1f);
+    glBegin(GL_LINE_LOOP);
+    for (int i = 0; i <= 20; ++i) {
+        float angle = (float)i / 20.0f * 6.2831853f;
+        glVertex2f(buttonX + cosf(angle) * buttonRadius / aspectRatio, 
+                   loadButtonY + sinf(angle) * buttonRadius);
+    }
+    glEnd();
+}
+
 void initialize_flowchart() {
     // Fixed spacing between all nodes
     double fixedSpacing = 0.5;
@@ -1014,6 +1281,9 @@ int main(void) {
         hoveredConnection = hit_connection(cursorX, worldCursorY, 0.05f);
         
         drawFlowchart();
+        
+        // Draw buttons in screen space (not affected by scroll)
+        drawButtons();
 
         glfwSwapBuffers(window);
         glfwPollEvents();
