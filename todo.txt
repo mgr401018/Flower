@@ -1,13 +1,21 @@
-color change
-menue
+color change -
+menue - 
 find how to add text
 dropdown menue
-item no cover menue
-
+item no cover menue -
+window resize
 
 move
 edit
-connect
+connect ?
 
 save load
+types
+start end -
+add by clicking connection
+
+node value and node functions
 ...
+
+ajecency matrix
+file-style menue
