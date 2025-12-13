@@ -590,6 +590,9 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <math.h>
+#include <string.h>
+#define TINYFD_NOLIB
+#include "imports/tinyfiledialogs.h"
 
 // Global variables for cursor position
 double cursorX = 0.0;
@@ -887,13 +890,32 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
     if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
         // Check if clicking on buttons (buttons are in screen space, not world space)
         if (cursor_over_button(buttonX, saveButtonY, window)) {
-            // Blue save button clicked
-            save_flowchart("flowchart.txt");
+            // Blue save button clicked - open save dialog
+            const char* filters[] = {"*.txt", "*.flow"};
+            const char* filename = tinyfd_saveFileDialog(
+                "Save Flowchart",
+                "flowchart.txt",
+                2, filters,
+                "Text Files (*.txt);;Flowchart Files (*.flow)"
+            );
+            if (filename != NULL && strlen(filename) > 0) {
+                save_flowchart(filename);
+            }
             return;
         }
         if (cursor_over_button(buttonX, loadButtonY, window)) {
-            // Yellow load button clicked
-            load_flowchart("flowchart.txt");
+            // Yellow load button clicked - open load dialog
+            const char* filters[] = {"*.txt", "*.flow"};
+            const char* filename = tinyfd_openFileDialog(
+                "Load Flowchart",
+                "",
+                2, filters,
+                "Text Files (*.txt);;Flowchart Files (*.flow)",
+                0
+            );
+            if (filename != NULL && strlen(filename) > 0) {
+                load_flowchart(filename);
+            }
             return;
         }
         
@@ -1172,10 +1194,121 @@ void drawPopupMenu() {
     glEnd();
 }
 
-void drawButtons() {
+// Helper function to draw simple text labels using lines
+void drawTextLabel(float x, float y, const char* text, float charHeight) {
+    float charWidth = charHeight * 0.6f;
+    float startX = x;
+    float textY = y;
+    
+    glColor3f(1.0f, 1.0f, 1.0f);
+    glBegin(GL_LINES);
+    
+    for (const char* c = text; *c != '\0'; ++c) {
+        float cx = startX;
+        
+        switch (*c) {
+            case 'S':
+            case 's':
+                glVertex2f(cx + charWidth, textY + charHeight * 0.5f);
+                glVertex2f(cx, textY + charHeight * 0.5f);
+                glVertex2f(cx, textY + charHeight * 0.5f);
+                glVertex2f(cx, textY);
+                glVertex2f(cx, textY);
+                glVertex2f(cx + charWidth, textY);
+                glVertex2f(cx + charWidth, textY);
+                glVertex2f(cx + charWidth, textY - charHeight * 0.5f);
+                glVertex2f(cx + charWidth, textY - charHeight * 0.5f);
+                glVertex2f(cx, textY - charHeight * 0.5f);
+                break;
+            case 'A':
+            case 'a':
+                {
+                    float ax0 = cx;
+                    float ax1 = cx + charWidth * 0.5f;
+                    float ax2 = cx + charWidth;
+                    float ayTop = textY + charHeight * 0.5f;
+                    float ayBot = textY - charHeight * 0.5f;
+                    float ayMid = textY;
+                    glVertex2f(ax0, ayBot);
+                    glVertex2f(ax1, ayTop);
+                    glVertex2f(ax1, ayTop);
+                    glVertex2f(ax2, ayBot);
+                    glVertex2f(ax0 + charWidth * 0.2f, ayMid);
+                    glVertex2f(ax2 - charWidth * 0.2f, ayMid);
+                }
+                break;
+            case 'V':
+            case 'v':
+                {
+                    float vx0 = cx;
+                    float vx1 = cx + charWidth * 0.5f;
+                    float vx2 = cx + charWidth;
+                    float vyTop = textY + charHeight * 0.5f;
+                    float vyBot = textY - charHeight * 0.5f;
+                    glVertex2f(vx0, vyTop);
+                    glVertex2f(vx1, vyBot);
+                    glVertex2f(vx1, vyBot);
+                    glVertex2f(vx2, vyTop);
+                }
+                break;
+            case 'E':
+            case 'e':
+                glVertex2f(cx + charWidth, textY + charHeight * 0.5f);
+                glVertex2f(cx, textY + charHeight * 0.5f);
+                glVertex2f(cx, textY + charHeight * 0.5f);
+                glVertex2f(cx, textY - charHeight * 0.5f);
+                glVertex2f(cx, textY);
+                glVertex2f(cx + charWidth * 0.8f, textY);
+                glVertex2f(cx, textY - charHeight * 0.5f);
+                glVertex2f(cx + charWidth, textY - charHeight * 0.5f);
+                break;
+            case 'L':
+            case 'l':
+                glVertex2f(cx, textY + charHeight * 0.5f);
+                glVertex2f(cx, textY - charHeight * 0.5f);
+                glVertex2f(cx, textY - charHeight * 0.5f);
+                glVertex2f(cx + charWidth, textY - charHeight * 0.5f);
+                break;
+            case 'O':
+            case 'o':
+                glVertex2f(cx, textY + charHeight * 0.5f);
+                glVertex2f(cx + charWidth, textY + charHeight * 0.5f);
+                glVertex2f(cx + charWidth, textY + charHeight * 0.5f);
+                glVertex2f(cx + charWidth, textY - charHeight * 0.5f);
+                glVertex2f(cx + charWidth, textY - charHeight * 0.5f);
+                glVertex2f(cx, textY - charHeight * 0.5f);
+                glVertex2f(cx, textY - charHeight * 0.5f);
+                glVertex2f(cx, textY + charHeight * 0.5f);
+                break;
+            case 'D':
+            case 'd':
+                glVertex2f(cx, textY - charHeight * 0.5f);
+                glVertex2f(cx, textY + charHeight * 0.5f);
+                glVertex2f(cx, textY + charHeight * 0.5f);
+                glVertex2f(cx + charWidth * 0.7f, textY + charHeight * 0.25f);
+                glVertex2f(cx + charWidth * 0.7f, textY + charHeight * 0.25f);
+                glVertex2f(cx + charWidth * 0.7f, textY - charHeight * 0.25f);
+                glVertex2f(cx + charWidth * 0.7f, textY - charHeight * 0.25f);
+                glVertex2f(cx, textY - charHeight * 0.5f);
+                break;
+            case ' ':
+                // Space - just advance position
+                break;
+        }
+        
+        startX += charWidth * 1.2f;  // Advance to next character position
+    }
+    
+    glEnd();
+}
+
+void drawButtons(GLFWwindow* window) {
     int width, height;
-    glfwGetWindowSize(glfwGetCurrentContext(), &width, &height);
+    glfwGetWindowSize(window, &width, &height);
     float aspectRatio = (float)width / (float)height;
+    
+    bool hoveringSave = cursor_over_button(buttonX, saveButtonY, window);
+    bool hoveringLoad = cursor_over_button(buttonX, loadButtonY, window);
     
     // Draw save button (blue)
     glColor3f(0.2f, 0.4f, 0.9f);
@@ -1218,6 +1351,63 @@ void drawButtons() {
                    loadButtonY + sinf(angle) * buttonRadius);
     }
     glEnd();
+    
+    // Draw hover labels
+    if (hoveringSave) {
+        // Draw label background
+        float labelX = buttonX + buttonRadius / aspectRatio + 0.05f;
+        float labelY = saveButtonY;
+        float labelWidth = 0.15f;
+        float labelHeight = 0.06f;
+        
+        glColor3f(0.1f, 0.1f, 0.15f);
+        glBegin(GL_QUADS);
+        glVertex2f(labelX, labelY + labelHeight * 0.5f);
+        glVertex2f(labelX + labelWidth, labelY + labelHeight * 0.5f);
+        glVertex2f(labelX + labelWidth, labelY - labelHeight * 0.5f);
+        glVertex2f(labelX, labelY - labelHeight * 0.5f);
+        glEnd();
+        
+        // Draw label border
+        glColor3f(0.7f, 0.7f, 0.7f);
+        glBegin(GL_LINE_LOOP);
+        glVertex2f(labelX, labelY + labelHeight * 0.5f);
+        glVertex2f(labelX + labelWidth, labelY + labelHeight * 0.5f);
+        glVertex2f(labelX + labelWidth, labelY - labelHeight * 0.5f);
+        glVertex2f(labelX, labelY - labelHeight * 0.5f);
+        glEnd();
+        
+        // Draw "SAVE" text
+        drawTextLabel(labelX + 0.01f, labelY, "SAVE", labelHeight * 0.5f);
+    }
+    
+    if (hoveringLoad) {
+        // Draw label background
+        float labelX = buttonX + buttonRadius / aspectRatio + 0.05f;
+        float labelY = loadButtonY;
+        float labelWidth = 0.15f;
+        float labelHeight = 0.06f;
+        
+        glColor3f(0.1f, 0.1f, 0.15f);
+        glBegin(GL_QUADS);
+        glVertex2f(labelX, labelY + labelHeight * 0.5f);
+        glVertex2f(labelX + labelWidth, labelY + labelHeight * 0.5f);
+        glVertex2f(labelX + labelWidth, labelY - labelHeight * 0.5f);
+        glVertex2f(labelX, labelY - labelHeight * 0.5f);
+        glEnd();
+        
+        // Draw label border
+        glColor3f(0.7f, 0.7f, 0.7f);
+        glBegin(GL_LINE_LOOP);
+        glVertex2f(labelX, labelY + labelHeight * 0.5f);
+        glVertex2f(labelX + labelWidth, labelY + labelHeight * 0.5f);
+        glVertex2f(labelX + labelWidth, labelY - labelHeight * 0.5f);
+        glVertex2f(labelX, labelY - labelHeight * 0.5f);
+        glEnd();
+        
+        // Draw "LOAD" text
+        drawTextLabel(labelX + 0.01f, labelY, "LOAD", labelHeight * 0.5f);
+    }
 }
 
 void initialize_flowchart() {
@@ -1283,7 +1473,7 @@ int main(void) {
         drawFlowchart();
         
         // Draw buttons in screen space (not affected by scroll)
-        drawButtons();
+        drawButtons(window);
 
         glfwSwapBuffers(window);
         glfwPollEvents();

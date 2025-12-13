@@ -1,21 +1,30 @@
 color change -
 menue - 
-find how to add text
+find how to add text ?
 dropdown menue
 item no cover menue -
 window resize
 
 move
 edit
-connect ?
+connect -
 
-save load
+save load -
 types
 start end -
-add by clicking connection
+add by clicking connection -
 
 node value and node functions
 ...
 
-ajecency matrix
+ajecency matrix -
 file-style menue
+
+!symetrical matrix /
+!file name -
+!button hiver -
+!DIFFERENT TYPES OF BLOCKS
+
+!change font 
+!figure out loops
+

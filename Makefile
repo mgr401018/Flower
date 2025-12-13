@@ -11,7 +11,7 @@ UNAME_S := $(shell uname -s)
 TARGET = triangle
 
 # Source files
-SRCS = main.c
+SRCS = main.c imports/tinyfiledialogs.c
 
 # Object files
 OBJS = $(SRCS:.c=.o)
