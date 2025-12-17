@@ -17,7 +17,14 @@ float draw_text(float x, float y, const char* text, float fontSize, float r, flo
 // Get text width without rendering
 float get_text_width(const char* text, float fontSize);
 
+// Set window dimensions (call when window is created or resized)
+void text_renderer_set_window_size(int width, int height);
+
 #endif // TEXT_RENDERER_H
+
+
+
+
 
 
 

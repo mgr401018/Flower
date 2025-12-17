@@ -27,4 +27,4 @@ file-style menue
 
 !change font 
 !figure out loops
-
+ ZOOM OUT/FULLSCRENE
