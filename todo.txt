@@ -20,13 +20,15 @@ node value and node functions
 ajecency matrix -
 file-style menue
 
-!symetrical matrix /
-!file name -
-!button hiver -
+symetrical matrix /
+file name -
+button hiver -
 !DIFFERENT TYPES OF BLOCKS
 
-!change font -
-!figure out loops
- ZOOM OUT/FULLSCRENE
+change font -
+!figure out loops -> if with connect back dot
+!ZOOM OUT/FULLSCRENE
 
-edit, delete, add value
+edit /
+delete -
+!add value

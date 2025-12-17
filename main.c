@@ -54,15 +54,23 @@ int nodeCount = 0;
 Connection connections[MAX_CONNECTIONS];
 int connectionCount = 0;
 
+// Popup menu types
+typedef enum {
+    MENU_TYPE_CONNECTION = 0,
+    MENU_TYPE_NODE = 1
+} MenuType;
+
 // Popup menu state
 typedef struct {
     bool active;
+    MenuType type;  // Type of menu (connection or node)
     double x;
     double y;
-    int connectionIndex;  // which connection was clicked
+    int connectionIndex;  // which connection was clicked (for connection menu)
+    int nodeIndex;  // which node was clicked (for node menu)
 } PopupMenu;
 
-PopupMenu popupMenu = {false, 0.0, 0.0, -1};
+PopupMenu popupMenu = {false, MENU_TYPE_CONNECTION, 0.0, 0.0, -1, -1};
 
 // Menu item dimensions
 const float menuItemHeight = 0.15f;
@@ -77,11 +85,24 @@ typedef struct {
     NodeType nodeType;  // Node type to insert when clicked
 } MenuItem;
 
-MenuItem menuItems[] = {
+// Connection menu items (for inserting nodes)
+MenuItem connectionMenuItems[] = {
     {"Process Node", NODE_NORMAL},
     {"Placeholder", NODE_NORMAL}
 };
-int menuItemCount = 2;
+int connectionMenuItemCount = 2;
+
+// Node menu items (for node operations)
+typedef struct {
+    const char* text;
+    int action;  // 0 = Delete, 1 = Value, etc.
+} NodeMenuItem;
+
+NodeMenuItem nodeMenuItems[] = {
+    {"Delete", 0},
+    {"Value", 1}
+};
+int nodeMenuItemCount = 2;
 
 // Cursor position callback
 void cursor_position_callback(GLFWwindow* window, double xpos, double ypos) {
@@ -104,17 +125,8 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
 // Check if cursor is over a menu item (deprecated - menu width is now dynamic)
 // This function is kept for compatibility but may not work correctly
 bool cursor_over_menu_item(double menuX, double menuY, int itemIndex) {
-    // Calculate dynamic menu width
-    float fontSize = menuItemHeight * 0.5f;
-    float maxTextWidth = 0.0f;
-    for (int i = 0; i < menuItemCount; i++) {
-        float textWidth = get_text_width(menuItems[i].text, fontSize);
-        if (textWidth > maxTextWidth) {
-            maxTextWidth = textWidth;
-        }
-    }
-    float textBasedWidth = maxTextWidth + menuPadding * 2.0f;
-    float menuItemWidth = (textBasedWidth > menuMinWidth) ? textBasedWidth : menuMinWidth;
+    // Use fixed menu width
+    float menuItemWidth = menuMinWidth;
     
     float itemY = menuY - itemIndex * (menuItemHeight + menuItemSpacing);
     return cursorX >= menuX && cursorX <= menuX + menuItemWidth &&
@@ -130,6 +142,20 @@ bool cursor_over_button(float buttonX, float buttonY, GLFWwindow* window) {
     float dx = (cursorX - buttonX) * aspectRatio;
     float dy = cursorY - buttonY;
     return sqrt(dx*dx + dy*dy) <= buttonRadius;
+}
+
+// Find which node the cursor is over
+static int hit_node(double x, double y) {
+    for (int i = 0; i < nodeCount; ++i) {
+        const FlowNode *n = &nodes[i];
+        
+        // Check if point is within node bounds
+        if (x >= n->x - n->width * 0.5f && x <= n->x + n->width * 0.5f &&
+            y >= n->y - n->height * 0.5f && y <= n->y + n->height * 0.5f) {
+            return i;
+        }
+    }
+    return -1;
 }
 
 // Find which connection (line) the cursor is near
@@ -279,6 +305,167 @@ void load_flowchart(const char* filename) {
     printf("Flowchart loaded from %s (%d nodes, %d connections)\n", 
            filename, nodeCount, connectionCount);
 }
+// Delete a node and reconnect adjacent nodes automatically
+void delete_node(int nodeIndex) {
+    if (nodeIndex < 0 || nodeIndex >= nodeCount) {
+        return;
+    }
+    
+    // Find all connections involving this node
+    int incomingConnections[MAX_CONNECTIONS];
+    int outgoingConnections[MAX_CONNECTIONS];
+    int incomingCount = 0;
+    int outgoingCount = 0;
+    
+    for (int i = 0; i < connectionCount; i++) {
+        if (connections[i].fromNode == nodeIndex) {
+            outgoingConnections[outgoingCount++] = i;
+        }
+        if (connections[i].toNode == nodeIndex) {
+            incomingConnections[incomingCount++] = i;
+        }
+    }
+    
+    // Track newly created connections for position adjustment
+    int newConnections[MAX_CONNECTIONS];
+    int newConnectionCount = 0;
+    
+    // Reconnect: for each incoming connection (A -> deleted) and each outgoing connection (deleted -> B),
+    // create a new connection (A -> B) if it doesn't already exist
+    for (int i = 0; i < incomingCount; i++) {
+        int incomingConn = incomingConnections[i];
+        int fromNode = connections[incomingConn].fromNode;
+        
+        for (int j = 0; j < outgoingCount; j++) {
+            int outgoingConn = outgoingConnections[j];
+            int toNode = connections[outgoingConn].toNode;
+            
+            // Skip if trying to connect to itself
+            if (fromNode == toNode) continue;
+            
+            // Check if connection already exists
+            bool connectionExists = false;
+            for (int k = 0; k < connectionCount; k++) {
+                if (connections[k].fromNode == fromNode && connections[k].toNode == toNode) {
+                    connectionExists = true;
+                    break;
+                }
+            }
+            
+            // Create new connection if it doesn't exist and we have room
+            if (!connectionExists && connectionCount < MAX_CONNECTIONS) {
+                connections[connectionCount].fromNode = fromNode;
+                connections[connectionCount].toNode = toNode;
+                newConnections[newConnectionCount++] = connectionCount;
+                connectionCount++;
+            }
+        }
+    }
+    
+    // Store original Y positions before any adjustments
+    double originalYPositions[MAX_NODES];
+    for (int i = 0; i < nodeCount; i++) {
+        originalYPositions[i] = nodes[i].y;
+    }
+    
+    // Adjust positions of reconnected nodes to maintain standard connection length
+    // Only adjust based on newly created connections
+    // Track which nodes need to move and by how much
+    double nodePositionDeltas[MAX_NODES] = {0.0};
+    bool nodeNeedsMove[MAX_NODES] = {false};
+    
+    for (int i = 0; i < newConnectionCount; i++) {
+        int connIdx = newConnections[i];
+        int fromNodeIdx = connections[connIdx].fromNode;
+        int toNodeIdx = connections[connIdx].toNode;
+        
+        if (toNodeIdx != nodeIndex) {
+            FlowNode *from = &nodes[fromNodeIdx];
+            
+            // Calculate the new Y position for the "to" node
+            const double initialConnectionLength = 0.28;
+            double newY = from->y - from->height * 0.5 - nodes[toNodeIdx].height * 0.5 - initialConnectionLength;
+            
+            // Calculate how much the node needs to move (negative means move up)
+            double deltaY = newY - originalYPositions[toNodeIdx];
+            
+            // Track the movement (use the maximum delta if node is moved multiple times)
+            if (!nodeNeedsMove[toNodeIdx] || fabs(deltaY) > fabs(nodePositionDeltas[toNodeIdx])) {
+                nodePositionDeltas[toNodeIdx] = deltaY;
+                nodeNeedsMove[toNodeIdx] = true;
+            }
+        }
+    }
+    
+    // Apply movements: move each node and all nodes below it
+    // Process nodes from top to bottom (highest Y first) to avoid double-moving
+    // Create sorted list of nodes that need to move
+    int nodesToMove[MAX_NODES];
+    int nodesToMoveCount = 0;
+    for (int i = 0; i < nodeCount; i++) {
+        if (nodeNeedsMove[i] && i != nodeIndex) {
+            nodesToMove[nodesToMoveCount++] = i;
+        }
+    }
+    
+    // Sort by original Y position (highest first, since Y decreases downward)
+    for (int i = 0; i < nodesToMoveCount - 1; i++) {
+        for (int j = i + 1; j < nodesToMoveCount; j++) {
+            if (originalYPositions[nodesToMove[i]] < originalYPositions[nodesToMove[j]]) {
+                int temp = nodesToMove[i];
+                nodesToMove[i] = nodesToMove[j];
+                nodesToMove[j] = temp;
+            }
+        }
+    }
+    
+    // Apply movements in order from top to bottom
+    for (int i = 0; i < nodesToMoveCount; i++) {
+        int nodeIdx = nodesToMove[i];
+        double deltaY = nodePositionDeltas[nodeIdx];
+        double originalY = originalYPositions[nodeIdx];
+        
+        // Move this node
+        nodes[nodeIdx].y = originalY + deltaY;
+        
+        // Move all nodes below this one (based on original positions) up by the same amount
+        // Use original positions to determine what's below, but apply to current positions
+        for (int j = 0; j < nodeCount; j++) {
+            if (j != nodeIdx && j != nodeIndex && originalYPositions[j] < originalY) {
+                nodes[j].y += deltaY;
+            }
+        }
+    }
+    
+    // Remove all connections involving the deleted node
+    // Work backwards to avoid index shifting issues
+    for (int i = connectionCount - 1; i >= 0; i--) {
+        if (connections[i].fromNode == nodeIndex || connections[i].toNode == nodeIndex) {
+            // Shift remaining connections down
+            for (int j = i; j < connectionCount - 1; j++) {
+                connections[j] = connections[j + 1];
+            }
+            connectionCount--;
+        }
+    }
+    
+    // Update connection indices that reference nodes after the deleted one
+    for (int i = 0; i < connectionCount; i++) {
+        if (connections[i].fromNode > nodeIndex) {
+            connections[i].fromNode--;
+        }
+        if (connections[i].toNode > nodeIndex) {
+            connections[i].toNode--;
+        }
+    }
+    
+    // Remove the node and shift remaining nodes
+    for (int i = nodeIndex; i < nodeCount - 1; i++) {
+        nodes[i] = nodes[i + 1];
+    }
+    nodeCount--;
+}
+
 void insert_node_in_connection(int connIndex, NodeType nodeType) {
     if (nodeCount >= MAX_NODES || connectionCount >= MAX_CONNECTIONS) {
         return;
@@ -363,12 +550,17 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
         // Check popup menu interaction
         if (popupMenu.active) {
             // Calculate menu dimensions (same as in drawPopupMenu)
-            float fontSize = menuItemHeight * 0.5f;
-            // const char* sampleText = "MMMMMMMMMMMMMMMMMMMM";  // 20 M's
-            // float textBasedWidth = get_text_width(sampleText, fontSize) + (menuPadding * 2.0f);
-            // float menuItemWidth = (textBasedWidth > menuMinWidth) ? textBasedWidth : menuMinWidth;
             float menuItemWidth = menuMinWidth;
-            float totalMenuHeight = menuItemCount * menuItemHeight + (menuItemCount - 1) * menuItemSpacing;
+            
+            // Determine menu item count based on menu type
+            int currentMenuItemCount = 0;
+            if (popupMenu.type == MENU_TYPE_CONNECTION) {
+                currentMenuItemCount = connectionMenuItemCount;
+            } else if (popupMenu.type == MENU_TYPE_NODE) {
+                currentMenuItemCount = nodeMenuItemCount;
+            }
+            
+            float totalMenuHeight = currentMenuItemCount * menuItemHeight + (currentMenuItemCount - 1) * menuItemSpacing;
             
             // Check which menu item was clicked (menu is in screen space)
             float menuX = (float)popupMenu.x;
@@ -380,7 +572,7 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
                 
                 // Determine which menu item was clicked
                 int clickedItem = -1;
-                for (int i = 0; i < menuItemCount; i++) {
+                for (int i = 0; i < currentMenuItemCount; i++) {
                     float itemY = menuY - i * (menuItemHeight + menuItemSpacing);
                     float itemBottom = itemY - menuItemHeight;
                     if (cursorY <= itemY && cursorY >= itemBottom) {
@@ -390,8 +582,18 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
                 }
                 
                 if (clickedItem >= 0) {
-                    // Insert node of the selected type
-                    insert_node_in_connection(popupMenu.connectionIndex, menuItems[clickedItem].nodeType);
+                    if (popupMenu.type == MENU_TYPE_CONNECTION) {
+                        // Insert node of the selected type
+                        insert_node_in_connection(popupMenu.connectionIndex, connectionMenuItems[clickedItem].nodeType);
+                    } else if (popupMenu.type == MENU_TYPE_NODE) {
+                        // Handle node menu actions
+                        if (nodeMenuItems[clickedItem].action == 0) {
+                            // Delete action
+                            delete_node(popupMenu.nodeIndex);
+                        } else if (nodeMenuItems[clickedItem].action == 1) {
+                            // Value action - do nothing for now
+                        }
+                    }
                     popupMenu.active = false;
                 } else {
                     // Clicked in menu but not on an item
@@ -405,18 +607,33 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
     }
     
     if (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_PRESS) {
-        // Check if we're clicking on a connection (use world-space coordinates)
-        int connIndex = hit_connection(cursorX, worldCursorY, 0.05f);
+        // Check if we're clicking on a node first (use world-space coordinates)
+        int nodeIndex = hit_node(cursorX, worldCursorY);
         
-        if (connIndex >= 0) {
-            // Open popup menu at cursor position (store screen-space coordinates so it doesn't scroll)
+        if (nodeIndex >= 0) {
+            // Open node popup menu at cursor position (store screen-space coordinates so it doesn't scroll)
             popupMenu.active = true;
+            popupMenu.type = MENU_TYPE_NODE;
             popupMenu.x = cursorX;
             popupMenu.y = cursorY;  // Use screen space, not world space
-            popupMenu.connectionIndex = connIndex;
+            popupMenu.nodeIndex = nodeIndex;
+            popupMenu.connectionIndex = -1;
         } else {
-            // Close menu if clicking elsewhere
-            popupMenu.active = false;
+            // Check if we're clicking on a connection (use world-space coordinates)
+            int connIndex = hit_connection(cursorX, worldCursorY, 0.05f);
+            
+            if (connIndex >= 0) {
+                // Open connection popup menu at cursor position (store screen-space coordinates so it doesn't scroll)
+                popupMenu.active = true;
+                popupMenu.type = MENU_TYPE_CONNECTION;
+                popupMenu.x = cursorX;
+                popupMenu.y = cursorY;  // Use screen space, not world space
+                popupMenu.connectionIndex = connIndex;
+                popupMenu.nodeIndex = -1;
+            } else {
+                // Close menu if clicking elsewhere
+                popupMenu.active = false;
+            }
         }
     }
 }
@@ -533,15 +750,17 @@ void drawPopupMenu() {
     
     // Calculate font size
     float fontSize = menuItemHeight * 0.5f;
-    
-
-    // // Set menu width to fit 20 characters, but ensure minimum width
-    // const char* sampleText = "MMMMMMMMMMMMMMMMMMMM";  // 20 M's (widest common character)
-    // float textBasedWidth = get_text_width(sampleText, fontSize) + (menuPadding * 2.0f);
-    // float menuItemWidth = (textBasedWidth > menuMinWidth) ? textBasedWidth : menuMinWidth;
     float menuItemWidth = menuMinWidth;
     
-    float totalMenuHeight = menuItemCount * menuItemHeight + (menuItemCount - 1) * menuItemSpacing;
+    // Determine menu item count and items based on menu type
+    int currentMenuItemCount = 0;
+    if (popupMenu.type == MENU_TYPE_CONNECTION) {
+        currentMenuItemCount = connectionMenuItemCount;
+    } else if (popupMenu.type == MENU_TYPE_NODE) {
+        currentMenuItemCount = nodeMenuItemCount;
+    }
+    
+    float totalMenuHeight = currentMenuItemCount * menuItemHeight + (currentMenuItemCount - 1) * menuItemSpacing;
     
     // Draw menu background (all items)
     glColor3f(0.2f, 0.2f, 0.25f);
@@ -563,7 +782,7 @@ void drawPopupMenu() {
     
     // Draw each menu item
     // Use screen space cursor since menu is in screen space
-    for (int i = 0; i < menuItemCount; i++) {
+    for (int i = 0; i < currentMenuItemCount; i++) {
         float itemY = menuY - i * (menuItemHeight + menuItemSpacing);
         float itemBottom = itemY - menuItemHeight;
         
@@ -586,7 +805,7 @@ void drawPopupMenu() {
         }
         
         // Draw item separator (except for last item)
-        if (i < menuItemCount - 1) {
+        if (i < currentMenuItemCount - 1) {
             glColor3f(0.5f, 0.5f, 0.5f);
             glBegin(GL_LINES);
             glVertex2f(menuX, itemBottom);
@@ -594,17 +813,24 @@ void drawPopupMenu() {
             glEnd();
         }
         
-        // Draw text for this menu item using text renderer
-        const char* menuText = menuItems[i].text;
+        // Get menu text based on menu type
+        const char* menuText = NULL;
+        if (popupMenu.type == MENU_TYPE_CONNECTION) {
+            menuText = connectionMenuItems[i].text;
+        } else if (popupMenu.type == MENU_TYPE_NODE) {
+            menuText = nodeMenuItems[i].text;
+        }
         
-        // Left-align text horizontally (with padding from left edge)
-        float textX = menuX + menuPadding;
-        
-        // Center vertically (adjust slightly for baseline)
-        float textY = itemY - menuItemHeight * 0.5f - fontSize * 0.15f;
-        
-        // Draw the text in white
-        draw_text(textX, textY, menuText, fontSize, 1.0f, 1.0f, 1.0f);
+        if (menuText) {
+            // Left-align text horizontally (with padding from left edge)
+            float textX = menuX + menuPadding;
+            
+            // Center vertically (adjust slightly for baseline)
+            float textY = itemY - menuItemHeight * 0.5f - fontSize * 0.15f;
+            
+            // Draw the text in white
+            draw_text(textX, textY, menuText, fontSize, 1.0f, 1.0f, 1.0f);
+        }
     }
 }
 
