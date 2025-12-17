@@ -1,11 +1,11 @@
 color change -
 menue - 
-find how to add text ?
-dropdown menue
+find how to add text ? -
+dropdown menue /
 item no cover menue -
-window resize
+window resize V
 
-move
+move /
 edit
 connect -
 
@@ -25,6 +25,8 @@ file-style menue
 !button hiver -
 !DIFFERENT TYPES OF BLOCKS
 
-!change font 
+!change font -
 !figure out loops
  ZOOM OUT/FULLSCRENE
+
+edit, delete, add value

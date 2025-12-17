@@ -1,5 +1,5 @@
 #define STB_TRUETYPE_IMPLEMENTATION
-#include "stb_truetype.h"
+#include "../imports/stb_truetype.h"
 #include "text_renderer.h"
 #include <stdio.h>
 #include <stdlib.h>

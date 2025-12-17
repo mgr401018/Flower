@@ -1,2 +1,6 @@
 flowchart.txt
 flowchart2.txt
+build/
+*.o
+*.exe
+triangle

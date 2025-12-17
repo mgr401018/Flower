@@ -6,7 +6,7 @@
 #include <string.h>
 #define TINYFD_NOLIB
 #include "imports/tinyfiledialogs.h"
-#include "imports/text_renderer.h"
+#include "src/text_renderer.h"
 
 // Global variables for cursor position
 double cursorX = 0.0;
@@ -65,9 +65,23 @@ typedef struct {
 PopupMenu popupMenu = {false, 0.0, 0.0, -1};
 
 // Menu item dimensions
-const float menuItemWidth = 0.35f;
 const float menuItemHeight = 0.15f;
 const float menuItemSpacing = 0.02f;
+const float menuPadding = 0.04f;  // Padding on left and right of text (in normalized coordinates)
+const float menuMinWidth = 0.8f;  // Minimum menu width in normalized coordinates (~4 cm on typical screen)
+
+// Menu items
+#define MAX_MENU_ITEMS 10
+typedef struct {
+    const char* text;
+    NodeType nodeType;  // Node type to insert when clicked
+} MenuItem;
+
+MenuItem menuItems[] = {
+    {"Process Node", NODE_NORMAL},
+    {"Placeholder", NODE_NORMAL}
+};
+int menuItemCount = 2;
 
 // Cursor position callback
 void cursor_position_callback(GLFWwindow* window, double xpos, double ypos) {
@@ -87,8 +101,21 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
     scrollOffsetY += yoffset * 0.1;  // Smooth scrolling factor
 }
 
-// Check if cursor is over a menu item
+// Check if cursor is over a menu item (deprecated - menu width is now dynamic)
+// This function is kept for compatibility but may not work correctly
 bool cursor_over_menu_item(double menuX, double menuY, int itemIndex) {
+    // Calculate dynamic menu width
+    float fontSize = menuItemHeight * 0.5f;
+    float maxTextWidth = 0.0f;
+    for (int i = 0; i < menuItemCount; i++) {
+        float textWidth = get_text_width(menuItems[i].text, fontSize);
+        if (textWidth > maxTextWidth) {
+            maxTextWidth = textWidth;
+        }
+    }
+    float textBasedWidth = maxTextWidth + menuPadding * 2.0f;
+    float menuItemWidth = (textBasedWidth > menuMinWidth) ? textBasedWidth : menuMinWidth;
+    
     float itemY = menuY - itemIndex * (menuItemHeight + menuItemSpacing);
     return cursorX >= menuX && cursorX <= menuX + menuItemWidth &&
            cursorY <= itemY && cursorY >= itemY - menuItemHeight;
@@ -335,19 +362,41 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
         
         // Check popup menu interaction
         if (popupMenu.active) {
-            // Check which menu item was clicked (menu is in world space)
+            // Calculate menu dimensions (same as in drawPopupMenu)
+            float fontSize = menuItemHeight * 0.5f;
+            const char* sampleText = "MMMMMMMMMMMMMMMMMMMM";  // 20 M's
+            float textBasedWidth = get_text_width(sampleText, fontSize) + (menuPadding * 2.0f);
+            float menuItemWidth = (textBasedWidth > menuMinWidth) ? textBasedWidth : menuMinWidth;
+            float totalMenuHeight = menuItemCount * menuItemHeight + (menuItemCount - 1) * menuItemSpacing;
+            
+            // Check which menu item was clicked (menu is in screen space)
             float menuX = (float)popupMenu.x;
             float menuY = (float)popupMenu.y;
             
-            // But cursor checking needs to compare with world-space cursor
+            // Check if click is within menu bounds (using screen-space cursor)
             if (cursorX >= menuX && cursorX <= menuX + menuItemWidth &&
-                worldCursorY <= menuY && worldCursorY >= menuY - menuItemHeight) {
-                // Insert normal node
-                insert_node_in_connection(popupMenu.connectionIndex, NODE_NORMAL);
-                popupMenu.active = false;
-            }
-            // Add more menu items here as needed
-            else {
+                cursorY <= menuY && cursorY >= menuY - totalMenuHeight) {
+                
+                // Determine which menu item was clicked
+                int clickedItem = -1;
+                for (int i = 0; i < menuItemCount; i++) {
+                    float itemY = menuY - i * (menuItemHeight + menuItemSpacing);
+                    float itemBottom = itemY - menuItemHeight;
+                    if (cursorY <= itemY && cursorY >= itemBottom) {
+                        clickedItem = i;
+                        break;
+                    }
+                }
+                
+                if (clickedItem >= 0) {
+                    // Insert node of the selected type
+                    insert_node_in_connection(popupMenu.connectionIndex, menuItems[clickedItem].nodeType);
+                    popupMenu.active = false;
+                } else {
+                    // Clicked in menu but not on an item
+                    popupMenu.active = false;
+                }
+            } else {
                 // Clicked outside menu, close it
                 popupMenu.active = false;
             }
@@ -359,10 +408,10 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
         int connIndex = hit_connection(cursorX, worldCursorY, 0.05f);
         
         if (connIndex >= 0) {
-            // Open popup menu at cursor position (store world-space coordinates)
+            // Open popup menu at cursor position (store screen-space coordinates so it doesn't scroll)
             popupMenu.active = true;
             popupMenu.x = cursorX;
-            popupMenu.y = worldCursorY;
+            popupMenu.y = cursorY;  // Use screen space, not world space
             popupMenu.connectionIndex = connIndex;
         } else {
             // Close menu if clicking elsewhere
@@ -468,253 +517,94 @@ void drawFlowchart(void) {
         drawFlowNode(&nodes[i]);
     }
     
-    // Draw popup menu within the same transform (so it scrolls with content)
-    drawPopupMenu();
-    
     glPopMatrix();
+    
+    // Draw popup menu in screen space (not affected by scroll)
+    drawPopupMenu();
 }
 
 void drawPopupMenu() {
     if (!popupMenu.active) return;
     
-    // Menu is stored in world space, so it moves with the scroll
+    // Menu is stored in screen space (not affected by scroll)
     float menuX = (float)popupMenu.x;
     float menuY = (float)popupMenu.y;
     
-    // Draw menu item background
+    // Calculate font size
+    float fontSize = menuItemHeight * 0.5f;
+    
+    // Set menu width to fit 20 characters, but ensure minimum width
+    const char* sampleText = "MMMMMMMMMMMMMMMMMMMM";  // 20 M's (widest common character)
+    float textBasedWidth = get_text_width(sampleText, fontSize) + (menuPadding * 2.0f);
+    float menuItemWidth = (textBasedWidth > menuMinWidth) ? textBasedWidth : menuMinWidth;
+    
+    float totalMenuHeight = menuItemCount * menuItemHeight + (menuItemCount - 1) * menuItemSpacing;
+    
+    // Draw menu background (all items)
     glColor3f(0.2f, 0.2f, 0.25f);
     glBegin(GL_QUADS);
     glVertex2f(menuX, menuY);
     glVertex2f(menuX + menuItemWidth, menuY);
-    glVertex2f(menuX + menuItemWidth, menuY - menuItemHeight);
-    glVertex2f(menuX, menuY - menuItemHeight);
+    glVertex2f(menuX + menuItemWidth, menuY - totalMenuHeight);
+    glVertex2f(menuX, menuY - totalMenuHeight);
     glEnd();
     
-    // Draw menu item border
+    // Draw menu border
     glColor3f(0.8f, 0.8f, 0.8f);
     glBegin(GL_LINE_LOOP);
     glVertex2f(menuX, menuY);
     glVertex2f(menuX + menuItemWidth, menuY);
-    glVertex2f(menuX + menuItemWidth, menuY - menuItemHeight);
-    glVertex2f(menuX, menuY - menuItemHeight);
+    glVertex2f(menuX + menuItemWidth, menuY - totalMenuHeight);
+    glVertex2f(menuX, menuY - totalMenuHeight);
     glEnd();
     
-    // Highlight if hovering (compare with world-space cursor)
-    double worldCursorY = cursorY - scrollOffsetY;
-    bool hovering = cursorX >= menuX && cursorX <= menuX + menuItemWidth &&
-                    worldCursorY <= menuY && worldCursorY >= menuY - menuItemHeight;
-    
-    if (hovering) {
-        glColor4f(1.0f, 1.0f, 1.0f, 0.2f);
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glBegin(GL_QUADS);
-        glVertex2f(menuX, menuY);
-        glVertex2f(menuX + menuItemWidth, menuY);
-        glVertex2f(menuX + menuItemWidth, menuY - menuItemHeight);
-        glVertex2f(menuX, menuY - menuItemHeight);
-        glEnd();
-        glDisable(GL_BLEND);
-    }
-    
-    // Draw text "Process Node"
-    glColor3f(1.0f, 1.0f, 1.0f);
-    float textY = menuY - menuItemHeight * 0.5f;
-    float x = menuX + 0.02f;
-    float h = menuItemHeight * 0.3f;
-    float w = h * 0.5f;
-    
-    glBegin(GL_LINES);
-    // "P"
-    glVertex2f(x, textY - h * 0.5f);
-    glVertex2f(x, textY + h * 0.5f);
-    glVertex2f(x, textY + h * 0.5f);
-    glVertex2f(x + w, textY + h * 0.5f);
-    glVertex2f(x + w, textY + h * 0.5f);
-    glVertex2f(x + w, textY);
-    glVertex2f(x + w, textY);
-    glVertex2f(x, textY);
-    x += w * 1.3f;
-    
-    // "R"
-    glVertex2f(x, textY - h * 0.5f);
-    glVertex2f(x, textY + h * 0.5f);
-    glVertex2f(x, textY + h * 0.5f);
-    glVertex2f(x + w, textY + h * 0.5f);
-    glVertex2f(x + w, textY + h * 0.5f);
-    glVertex2f(x + w, textY);
-    glVertex2f(x + w, textY);
-    glVertex2f(x, textY);
-    glVertex2f(x, textY);
-    glVertex2f(x + w, textY - h * 0.5f);
-    x += w * 1.3f;
-    
-    // "O"
-    glVertex2f(x, textY + h * 0.5f);
-    glVertex2f(x + w, textY + h * 0.5f);
-    glVertex2f(x + w, textY + h * 0.5f);
-    glVertex2f(x + w, textY - h * 0.5f);
-    glVertex2f(x + w, textY - h * 0.5f);
-    glVertex2f(x, textY - h * 0.5f);
-    glVertex2f(x, textY - h * 0.5f);
-    glVertex2f(x, textY + h * 0.5f);
-    x += w * 1.3f;
-    
-    // "C"
-    glVertex2f(x, textY + h * 0.5f);
-    glVertex2f(x + w, textY + h * 0.5f);
-    glVertex2f(x, textY - h * 0.5f);
-    glVertex2f(x + w, textY - h * 0.5f);
-    glVertex2f(x, textY + h * 0.5f);
-    glVertex2f(x, textY - h * 0.5f);
-    x += w * 1.3f;
-    
-    // "E"
-    glVertex2f(x + w, textY + h * 0.5f);
-    glVertex2f(x, textY + h * 0.5f);
-    glVertex2f(x, textY + h * 0.5f);
-    glVertex2f(x, textY - h * 0.5f);
-    glVertex2f(x, textY);
-    glVertex2f(x + w * 0.8f, textY);
-    glVertex2f(x, textY - h * 0.5f);
-    glVertex2f(x + w, textY - h * 0.5f);
-    x += w * 1.3f;
-    
-    // "S"
-    glVertex2f(x + w, textY + h * 0.5f);
-    glVertex2f(x, textY + h * 0.5f);
-    glVertex2f(x, textY + h * 0.5f);
-    glVertex2f(x, textY);
-    glVertex2f(x, textY);
-    glVertex2f(x + w, textY);
-    glVertex2f(x + w, textY);
-    glVertex2f(x + w, textY - h * 0.5f);
-    glVertex2f(x + w, textY - h * 0.5f);
-    glVertex2f(x, textY - h * 0.5f);
-    x += w * 1.3f;
-    
-    // "S" (again)
-    glVertex2f(x + w, textY + h * 0.5f);
-    glVertex2f(x, textY + h * 0.5f);
-    glVertex2f(x, textY + h * 0.5f);
-    glVertex2f(x, textY);
-    glVertex2f(x, textY);
-    glVertex2f(x + w, textY);
-    glVertex2f(x + w, textY);
-    glVertex2f(x + w, textY - h * 0.5f);
-    glVertex2f(x + w, textY - h * 0.5f);
-    glVertex2f(x, textY - h * 0.5f);
-    
-    glEnd();
-}
-
-// Helper function to draw simple text labels using lines
-void drawTextLabel(float x, float y, const char* text, float charHeight) {
-    float charWidth = charHeight * 0.6f;
-    float startX = x;
-    float textY = y;
-    
-    glColor3f(1.0f, 1.0f, 1.0f);
-    glBegin(GL_LINES);
-    
-    for (const char* c = text; *c != '\0'; ++c) {
-        float cx = startX;
+    // Draw each menu item
+    // Use screen space cursor since menu is in screen space
+    for (int i = 0; i < menuItemCount; i++) {
+        float itemY = menuY - i * (menuItemHeight + menuItemSpacing);
+        float itemBottom = itemY - menuItemHeight;
         
-        switch (*c) {
-            case 'S':
-            case 's':
-                glVertex2f(cx + charWidth, textY + charHeight * 0.5f);
-                glVertex2f(cx, textY + charHeight * 0.5f);
-                glVertex2f(cx, textY + charHeight * 0.5f);
-                glVertex2f(cx, textY);
-                glVertex2f(cx, textY);
-                glVertex2f(cx + charWidth, textY);
-                glVertex2f(cx + charWidth, textY);
-                glVertex2f(cx + charWidth, textY - charHeight * 0.5f);
-                glVertex2f(cx + charWidth, textY - charHeight * 0.5f);
-                glVertex2f(cx, textY - charHeight * 0.5f);
-                break;
-            case 'A':
-            case 'a':
-                {
-                    float ax0 = cx;
-                    float ax1 = cx + charWidth * 0.5f;
-                    float ax2 = cx + charWidth;
-                    float ayTop = textY + charHeight * 0.5f;
-                    float ayBot = textY - charHeight * 0.5f;
-                    float ayMid = textY;
-                    glVertex2f(ax0, ayBot);
-                    glVertex2f(ax1, ayTop);
-                    glVertex2f(ax1, ayTop);
-                    glVertex2f(ax2, ayBot);
-                    glVertex2f(ax0 + charWidth * 0.2f, ayMid);
-                    glVertex2f(ax2 - charWidth * 0.2f, ayMid);
-                }
-                break;
-            case 'V':
-            case 'v':
-                {
-                    float vx0 = cx;
-                    float vx1 = cx + charWidth * 0.5f;
-                    float vx2 = cx + charWidth;
-                    float vyTop = textY + charHeight * 0.5f;
-                    float vyBot = textY - charHeight * 0.5f;
-                    glVertex2f(vx0, vyTop);
-                    glVertex2f(vx1, vyBot);
-                    glVertex2f(vx1, vyBot);
-                    glVertex2f(vx2, vyTop);
-                }
-                break;
-            case 'E':
-            case 'e':
-                glVertex2f(cx + charWidth, textY + charHeight * 0.5f);
-                glVertex2f(cx, textY + charHeight * 0.5f);
-                glVertex2f(cx, textY + charHeight * 0.5f);
-                glVertex2f(cx, textY - charHeight * 0.5f);
-                glVertex2f(cx, textY);
-                glVertex2f(cx + charWidth * 0.8f, textY);
-                glVertex2f(cx, textY - charHeight * 0.5f);
-                glVertex2f(cx + charWidth, textY - charHeight * 0.5f);
-                break;
-            case 'L':
-            case 'l':
-                glVertex2f(cx, textY + charHeight * 0.5f);
-                glVertex2f(cx, textY - charHeight * 0.5f);
-                glVertex2f(cx, textY - charHeight * 0.5f);
-                glVertex2f(cx + charWidth, textY - charHeight * 0.5f);
-                break;
-            case 'O':
-            case 'o':
-                glVertex2f(cx, textY + charHeight * 0.5f);
-                glVertex2f(cx + charWidth, textY + charHeight * 0.5f);
-                glVertex2f(cx + charWidth, textY + charHeight * 0.5f);
-                glVertex2f(cx + charWidth, textY - charHeight * 0.5f);
-                glVertex2f(cx + charWidth, textY - charHeight * 0.5f);
-                glVertex2f(cx, textY - charHeight * 0.5f);
-                glVertex2f(cx, textY - charHeight * 0.5f);
-                glVertex2f(cx, textY + charHeight * 0.5f);
-                break;
-            case 'D':
-            case 'd':
-                glVertex2f(cx, textY - charHeight * 0.5f);
-                glVertex2f(cx, textY + charHeight * 0.5f);
-                glVertex2f(cx, textY + charHeight * 0.5f);
-                glVertex2f(cx + charWidth * 0.7f, textY + charHeight * 0.25f);
-                glVertex2f(cx + charWidth * 0.7f, textY + charHeight * 0.25f);
-                glVertex2f(cx + charWidth * 0.7f, textY - charHeight * 0.25f);
-                glVertex2f(cx + charWidth * 0.7f, textY - charHeight * 0.25f);
-                glVertex2f(cx, textY - charHeight * 0.5f);
-                break;
-            case ' ':
-                // Space - just advance position
-                break;
+        // Check if hovering this item (using screen space cursor)
+        bool hovering = cursorX >= menuX && cursorX <= menuX + menuItemWidth &&
+                        cursorY <= itemY && cursorY >= itemBottom;
+        
+        // Draw hover highlight
+        if (hovering) {
+            glColor4f(1.0f, 1.0f, 1.0f, 0.2f);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glBegin(GL_QUADS);
+            glVertex2f(menuX, itemY);
+            glVertex2f(menuX + menuItemWidth, itemY);
+            glVertex2f(menuX + menuItemWidth, itemBottom);
+            glVertex2f(menuX, itemBottom);
+            glEnd();
+            glDisable(GL_BLEND);
         }
         
-        startX += charWidth * 1.2f;  // Advance to next character position
+        // Draw item separator (except for last item)
+        if (i < menuItemCount - 1) {
+            glColor3f(0.5f, 0.5f, 0.5f);
+            glBegin(GL_LINES);
+            glVertex2f(menuX, itemBottom);
+            glVertex2f(menuX + menuItemWidth, itemBottom);
+            glEnd();
+        }
+        
+        // Draw text for this menu item using text renderer
+        const char* menuText = menuItems[i].text;
+        
+        // Left-align text horizontally (with padding from left edge)
+        float textX = menuX + menuPadding;
+        
+        // Center vertically (adjust slightly for baseline)
+        float textY = itemY - menuItemHeight * 0.5f - fontSize * 0.15f;
+        
+        // Draw the text in white
+        draw_text(textX, textY, menuText, fontSize, 1.0f, 1.0f, 1.0f);
     }
-    
-    glEnd();
 }
+
 
 void drawButtons(GLFWwindow* window) {
     int width, height;

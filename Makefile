@@ -2,19 +2,26 @@
 CC = gcc
 
 # Compiler flags
-CFLAGS = -Wall -Wextra -O2
+CFLAGS = -Wall -Wextra -O2 -Isrc -Iimports
 
 # Detect operating system
 UNAME_S := $(shell uname -s)
+
+# Directories
+SRC_DIR = src
+BUILD_DIR = build
+IMPORTS_DIR = imports
 
 # Target executable name
 TARGET = triangle
 
 # Source files
-SRCS = main.c imports/tinyfiledialogs.c imports/text_renderer.c
+SRCS = main.c \
+       $(IMPORTS_DIR)/tinyfiledialogs.c \
+       $(SRC_DIR)/text_renderer.c
 
-# Object files
-OBJS = $(SRCS:.c=.o)
+# Object files (in build directory)
+OBJS = $(SRCS:%.c=$(BUILD_DIR)/%.o)
 
 # Libraries and flags based on OS
 ifeq ($(UNAME_S),Linux)
@@ -29,23 +36,37 @@ ifeq ($(OS),Windows_NT)
 endif
 
 # Default target
-all: $(TARGET)
+all: $(BUILD_DIR)/$(TARGET)
+
+# Create build directory structure
+$(BUILD_DIR)/%.o: | $(BUILD_DIR) $(BUILD_DIR)/$(SRC_DIR) $(BUILD_DIR)/$(IMPORTS_DIR)
+
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
+
+$(BUILD_DIR)/$(SRC_DIR):
+	mkdir -p $(BUILD_DIR)/$(SRC_DIR)
+
+$(BUILD_DIR)/$(IMPORTS_DIR):
+	mkdir -p $(BUILD_DIR)/$(IMPORTS_DIR)
 
 # Link object files to create executable
-$(TARGET): $(OBJS)
-	$(CC) $(CFLAGS) -o $(TARGET) $(OBJS) $(LIBS)
+$(BUILD_DIR)/$(TARGET): $(OBJS)
+	$(CC) $(CFLAGS) -o $(BUILD_DIR)/$(TARGET) $(OBJS) $(LIBS)
 
-# Compile source files to object files
-%.o: %.c
+# Compile source files to object files in build directory
+$(BUILD_DIR)/%.o: %.c
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Run the program
-run: $(TARGET)
-	./$(TARGET)
+run: $(BUILD_DIR)/$(TARGET)
+	./$(BUILD_DIR)/$(TARGET)
 
 # Clean build artifacts
 clean:
-	rm -f $(OBJS) $(TARGET) triangle.exe
+	rm -rf $(BUILD_DIR)
+	rm -f $(TARGET) triangle.exe
 
 # Phony targets
 .PHONY: all run clean
