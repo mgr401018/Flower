@@ -364,9 +364,10 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
         if (popupMenu.active) {
             // Calculate menu dimensions (same as in drawPopupMenu)
             float fontSize = menuItemHeight * 0.5f;
-            const char* sampleText = "MMMMMMMMMMMMMMMMMMMM";  // 20 M's
-            float textBasedWidth = get_text_width(sampleText, fontSize) + (menuPadding * 2.0f);
-            float menuItemWidth = (textBasedWidth > menuMinWidth) ? textBasedWidth : menuMinWidth;
+            // const char* sampleText = "MMMMMMMMMMMMMMMMMMMM";  // 20 M's
+            // float textBasedWidth = get_text_width(sampleText, fontSize) + (menuPadding * 2.0f);
+            // float menuItemWidth = (textBasedWidth > menuMinWidth) ? textBasedWidth : menuMinWidth;
+            float menuItemWidth = menuMinWidth;
             float totalMenuHeight = menuItemCount * menuItemHeight + (menuItemCount - 1) * menuItemSpacing;
             
             // Check which menu item was clicked (menu is in screen space)
@@ -533,10 +534,12 @@ void drawPopupMenu() {
     // Calculate font size
     float fontSize = menuItemHeight * 0.5f;
     
-    // Set menu width to fit 20 characters, but ensure minimum width
-    const char* sampleText = "MMMMMMMMMMMMMMMMMMMM";  // 20 M's (widest common character)
-    float textBasedWidth = get_text_width(sampleText, fontSize) + (menuPadding * 2.0f);
-    float menuItemWidth = (textBasedWidth > menuMinWidth) ? textBasedWidth : menuMinWidth;
+
+    // // Set menu width to fit 20 characters, but ensure minimum width
+    // const char* sampleText = "MMMMMMMMMMMMMMMMMMMM";  // 20 M's (widest common character)
+    // float textBasedWidth = get_text_width(sampleText, fontSize) + (menuPadding * 2.0f);
+    // float menuItemWidth = (textBasedWidth > menuMinWidth) ? textBasedWidth : menuMinWidth;
+    float menuItemWidth = menuMinWidth;
     
     float totalMenuHeight = menuItemCount * menuItemHeight + (menuItemCount - 1) * menuItemSpacing;
     
