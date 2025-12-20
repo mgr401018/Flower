@@ -15,8 +15,12 @@ double cursorY = 0.0;
 // Hovered connection tracking
 int hoveredConnection = -1;
 
-// Scroll offset for vertical panning
+// Scroll offset for panning
+double scrollOffsetX = 0.0;
 double scrollOffsetY = 0.0;
+
+// Grid system
+const double GRID_CELL_SIZE = 0.5;
 
 // Circular button configuration (top-left corner, vertically aligned)
 const float buttonRadius = 0.04f;
@@ -104,6 +108,31 @@ NodeMenuItem nodeMenuItems[] = {
 };
 int nodeMenuItemCount = 2;
 
+// Grid helper functions
+static double grid_to_world_x(int gridX) {
+    return gridX * GRID_CELL_SIZE;
+}
+
+static double grid_to_world_y(int gridY) {
+    return gridY * GRID_CELL_SIZE;
+}
+
+static int world_to_grid_x(double x) {
+    return (int)round(x / GRID_CELL_SIZE);
+}
+
+static int world_to_grid_y(double y) {
+    return (int)round(y / GRID_CELL_SIZE);
+}
+
+static double snap_to_grid_x(double x) {
+    return grid_to_world_x(world_to_grid_x(x));
+}
+
+static double snap_to_grid_y(double y) {
+    return grid_to_world_y(world_to_grid_y(y));
+}
+
 // Cursor position callback
 void cursor_position_callback(GLFWwindow* window, double xpos, double ypos) {
     int width, height;
@@ -115,11 +144,11 @@ void cursor_position_callback(GLFWwindow* window, double xpos, double ypos) {
     cursorY = -((ypos / height) * 2.0 - 1.0);
 }
 
-// Scroll callback for vertical panning
+// Scroll callback for panning (both horizontal and vertical)
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
     (void)window;   // Mark as intentionally unused
-    (void)xoffset;  // Mark as intentionally unused
-    scrollOffsetY += yoffset * 0.1;  // Smooth scrolling factor
+    scrollOffsetX += xoffset * 0.1;  // Smooth horizontal scrolling factor
+    scrollOffsetY += yoffset * 0.1;  // Smooth vertical scrolling factor
 }
 
 // Check if cursor is over a menu item (deprecated - menu width is now dynamic)
@@ -158,7 +187,29 @@ static int hit_node(double x, double y) {
     return -1;
 }
 
-// Find which connection (line) the cursor is near
+// Helper function to calculate distance from point to line segment
+static float point_to_line_segment_dist(float px, float py, float x1, float y1, float x2, float y2) {
+    float dx = x2 - x1;
+    float dy = y2 - y1;
+    float len2 = dx*dx + dy*dy;
+    
+    if (len2 < 0.0001f) {
+        // Degenerate segment, just return distance to endpoint
+        float d1 = sqrt((px - x1)*(px - x1) + (py - y1)*(py - y1));
+        float d2 = sqrt((px - x2)*(px - x2) + (py - y2)*(py - y2));
+        return fmin(d1, d2);
+    }
+    
+    float t = ((px - x1) * dx + (py - y1) * dy) / len2;
+    t = fmax(0.0f, fmin(1.0f, t));
+    
+    float projX = x1 + t * dx;
+    float projY = y1 + t * dy;
+    
+    return sqrt((px - projX)*(px - projX) + (py - projY)*(py - projY));
+}
+
+// Find which connection (L-shaped path) the cursor is near
 static int hit_connection(double x, double y, float threshold) {
     for (int i = 0; i < connectionCount; ++i) {
         const FlowNode *from = &nodes[connections[i].fromNode];
@@ -169,20 +220,28 @@ static int hit_connection(double x, double y, float threshold) {
         float x2 = (float)to->x;
         float y2 = (float)(to->y + to->height * 0.5f);
         
-        // Calculate distance from point to line segment
-        float dx = x2 - x1;
-        float dy = y2 - y1;
-        float len2 = dx*dx + dy*dy;
+        float dist;
         
-        if (len2 < 0.0001f) continue;
-        
-        float t = ((x - x1) * dx + (y - y1) * dy) / len2;
-        t = fmax(0.0f, fmin(1.0f, t));
-        
-        float projX = x1 + t * dx;
-        float projY = y1 + t * dy;
-        
-        float dist = sqrt((x - projX)*(x - projX) + (y - projY)*(y - projY));
+        // Handle different connection shapes
+        if (fabs(x1 - x2) < 0.001f) {
+            // Same X: vertical line only
+            dist = point_to_line_segment_dist((float)x, (float)y, x1, y1, x2, y2);
+        } else if (fabs(y1 - y2) < 0.001f) {
+            // Same Y: horizontal line only
+            dist = point_to_line_segment_dist((float)x, (float)y, x1, y1, x2, y2);
+        } else {
+            // Different X and Y: L-shape (horizontal then vertical)
+            float midX = x2;  // Horizontal segment goes to target X
+            float midY = y1;  // Vertical segment starts from source Y
+            
+            // Check distance to horizontal segment
+            float distHoriz = point_to_line_segment_dist((float)x, (float)y, x1, y1, midX, midY);
+            // Check distance to vertical segment
+            float distVert = point_to_line_segment_dist((float)x, (float)y, midX, midY, x2, y2);
+            
+            // Use minimum distance to either segment
+            dist = fmin(distHoriz, distVert);
+        }
         
         if (dist < threshold) {
             return i;
@@ -285,6 +344,9 @@ void load_flowchart(const char* filename) {
             fclose(file);
             return;
         }
+        // Snap loaded nodes to grid
+        nodes[i].x = snap_to_grid_x(nodes[i].x);
+        nodes[i].y = snap_to_grid_y(nodes[i].y);
         nodes[i].type = (NodeType)nodeType;
         nodeCount++;
     }
@@ -425,14 +487,14 @@ void delete_node(int nodeIndex) {
         double deltaY = nodePositionDeltas[nodeIdx];
         double originalY = originalYPositions[nodeIdx];
         
-        // Move this node
-        nodes[nodeIdx].y = originalY + deltaY;
+        // Move this node and snap to grid
+        nodes[nodeIdx].y = snap_to_grid_y(originalY + deltaY);
         
         // Move all nodes below this one (based on original positions) up by the same amount
         // Use original positions to determine what's below, but apply to current positions
         for (int j = 0; j < nodeCount; j++) {
             if (j != nodeIdx && j != nodeIndex && originalYPositions[j] < originalY) {
-                nodes[j].y += deltaY;
+                nodes[j].y = snap_to_grid_y(nodes[j].y + deltaY);
             }
         }
     }
@@ -475,16 +537,19 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
     FlowNode *from = &nodes[oldConn.fromNode];
     FlowNode *to = &nodes[oldConn.toNode];
     
-    // Fixed vertical spacing for consistent connection lengths
-    double fixedSpacing = 0.5;  // Fixed distance between nodes
-    
     // Store the original Y position of the "to" node before we modify anything
     double originalToY = to->y;
     
-    // Create new node positioned at fixed spacing below the "from" node
+    // Calculate grid positions
+    int fromGridX = world_to_grid_x(from->x);
+    int fromGridY = world_to_grid_y(from->y);
+    int toGridY = world_to_grid_y(to->y);
+    
+    // Create new node positioned one grid cell below the "from" node
+    int newGridY = fromGridY - 1;
     FlowNode *newNode = &nodes[nodeCount];
-    newNode->x = from->x;  // Keep same X position for vertical flow
-    newNode->y = from->y - fixedSpacing;  // Fixed spacing from parent
+    newNode->x = snap_to_grid_x(from->x);  // Keep same X grid position
+    newNode->y = snap_to_grid_y(grid_to_world_y(newGridY));  // One grid cell below
     newNode->width = 0.35f;
     newNode->height = 0.22f;
     newNode->value = nodeCount;
@@ -492,10 +557,13 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
     int newNodeIndex = nodeCount;
     nodeCount++;
     
-    // Push the "to" node and all nodes below it further down by the same fixed spacing
+    // Push the "to" node and all nodes below it further down by one grid cell
+    double gridSpacing = GRID_CELL_SIZE;
     for (int i = 0; i < nodeCount; ++i) {
         if (nodes[i].y <= originalToY && i != newNodeIndex) {
-            nodes[i].y -= fixedSpacing;
+            nodes[i].y -= gridSpacing;
+            // Snap to grid after moving
+            nodes[i].y = snap_to_grid_y(nodes[i].y);
         }
     }
     
@@ -513,6 +581,7 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
     (void)mods;    // Mark as intentionally unused
     
     // Calculate world-space cursor position (accounting for scroll)
+    double worldCursorX = cursorX - scrollOffsetX;
     double worldCursorY = cursorY - scrollOffsetY;
     
     if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
@@ -608,7 +677,7 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
     
     if (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_PRESS) {
         // Check if we're clicking on a node first (use world-space coordinates)
-        int nodeIndex = hit_node(cursorX, worldCursorY);
+        int nodeIndex = hit_node(worldCursorX, worldCursorY);
         
         if (nodeIndex >= 0) {
             // Open node popup menu at cursor position (store screen-space coordinates so it doesn't scroll)
@@ -620,7 +689,7 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
             popupMenu.connectionIndex = -1;
         } else {
             // Check if we're clicking on a connection (use world-space coordinates)
-            int connIndex = hit_connection(cursorX, worldCursorY, 0.05f);
+            int connIndex = hit_connection(worldCursorX, worldCursorY, 0.05f);
             
             if (connIndex >= 0) {
                 // Open connection popup menu at cursor position (store screen-space coordinates so it doesn't scroll)
@@ -702,11 +771,11 @@ void drawFlowNode(const FlowNode *n) {
 }
 
 void drawFlowchart(void) {
-    // Apply scroll transformation
+    // Apply scroll transformation (both horizontal and vertical)
     glPushMatrix();
-    glTranslatef(0.0f, (float)scrollOffsetY, 0.0f);
+    glTranslatef((float)scrollOffsetX, (float)scrollOffsetY, 0.0f);
     
-    // Draw connections
+    // Draw connections as right-angle L-shapes
     glLineWidth(3.0f);
     for (int i = 0; i < connectionCount; ++i) {
         const FlowNode *from = &nodes[connections[i].fromNode];
@@ -723,10 +792,34 @@ void drawFlowchart(void) {
             glColor3f(0.0f, 0.6f, 0.8f);  // Normal cyan
         }
         
-        glBegin(GL_LINES);
-        glVertex2f(x1, y1);
-        glVertex2f(x2, y2);
-        glEnd();
+        // Draw right-angle connection: horizontal then vertical
+        // Handle cases: same X (vertical only), same Y (horizontal only), different (L-shape)
+        if (fabs(x1 - x2) < 0.001f) {
+            // Same X: vertical line only
+            glBegin(GL_LINES);
+            glVertex2f(x1, y1);
+            glVertex2f(x2, y2);
+            glEnd();
+        } else if (fabs(y1 - y2) < 0.001f) {
+            // Same Y: horizontal line only
+            glBegin(GL_LINES);
+            glVertex2f(x1, y1);
+            glVertex2f(x2, y2);
+            glEnd();
+        } else {
+            // Different X and Y: L-shape (horizontal then vertical)
+            float midX = x2;  // Horizontal segment goes to target X
+            float midY = y1;  // Vertical segment starts from source Y
+            
+            glBegin(GL_LINES);
+            // Horizontal segment: from source to (target X, source Y)
+            glVertex2f(x1, y1);
+            glVertex2f(midX, midY);
+            // Vertical segment: from (target X, source Y) to target
+            glVertex2f(midX, midY);
+            glVertex2f(x2, y2);
+            glEnd();
+        }
     }
     glLineWidth(1.0f);
 
@@ -956,20 +1049,17 @@ void drawButtons(GLFWwindow* window) {
 }
 
 void initialize_flowchart() {
-    // Fixed spacing between all nodes
-    double fixedSpacing = 0.5;
-    
-    // Create START node
-    nodes[0].x = 0.0;
-    nodes[0].y = 0.6;
+    // Create START node at grid position (0, 0)
+    nodes[0].x = grid_to_world_x(0);
+    nodes[0].y = grid_to_world_y(0);
     nodes[0].width = 0.35f;
     nodes[0].height = 0.22f;
     nodes[0].value = 0;
     nodes[0].type = NODE_START;
     
-    // Create END node with fixed spacing from START
-    nodes[1].x = 0.0;
-    nodes[1].y = 0.6 - fixedSpacing;  // Fixed spacing from START
+    // Create END node at grid position (0, -1)
+    nodes[1].x = grid_to_world_x(0);
+    nodes[1].y = grid_to_world_y(-1);
     nodes[1].width = 0.35f;
     nodes[1].height = 0.22f;
     nodes[1].value = 1;
@@ -1020,8 +1110,9 @@ int main(void) {
         glClear(GL_COLOR_BUFFER_BIT);
         
         // Update hovered connection (use world-space cursor)
+        double worldCursorX = cursorX - scrollOffsetX;
         double worldCursorY = cursorY - scrollOffsetY;
-        hoveredConnection = hit_connection(cursorX, worldCursorY, 0.05f);
+        hoveredConnection = hit_connection(worldCursorX, worldCursorY, 0.05f);
         
         drawFlowchart();
         
