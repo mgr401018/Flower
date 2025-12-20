@@ -1,6 +1,7 @@
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "../imports/stb_truetype.h"
 #include "text_renderer.h"
+#include "embedded_font.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -29,29 +30,44 @@ int init_text_renderer(const char* fontPath) {
         cleanup_text_renderer();
     }
     
-    const char* path = fontPath;
-    if (!path) {
-        // Default to local DejaVu Sans Mono if available
-        path = "imports/DejaVuSansMono.ttf";
-    }
+    const unsigned char* font_data = NULL;
+    size_t font_size = 0;
     
-    FILE* font_file = fopen(path, "rb");
-    if (!font_file) {
-        fprintf(stderr, "Warning: Could not open font file: %s\n", path);
-        fprintf(stderr, "Text rendering will not work properly.\n");
-        return 0;
-    }
-    
-    size_t bytes_read = fread(ttf_buffer, 1, sizeof(ttf_buffer), font_file);
-    fclose(font_file);
-    
-    if (bytes_read == 0) {
-        fprintf(stderr, "Warning: Could not read font file: %s\n", path);
-        return 0;
+    if (fontPath == NULL) {
+        // Use embedded font
+        font_data = imports_DejaVuSansMono_ttf;
+        font_size = imports_DejaVuSansMono_ttf_len;
+        
+        // Copy to buffer if it fits
+        if (font_size <= sizeof(ttf_buffer)) {
+            memcpy(ttf_buffer, font_data, font_size);
+            font_data = ttf_buffer;
+        } else {
+            fprintf(stderr, "Warning: Embedded font is too large\n");
+            return 0;
+        }
+    } else {
+        // Load from file (for development/testing)
+        FILE* font_file = fopen(fontPath, "rb");
+        if (!font_file) {
+            fprintf(stderr, "Warning: Could not open font file: %s\n", fontPath);
+            fprintf(stderr, "Text rendering will not work properly.\n");
+            return 0;
+        }
+        
+        size_t bytes_read = fread(ttf_buffer, 1, sizeof(ttf_buffer), font_file);
+        fclose(font_file);
+        
+        if (bytes_read == 0) {
+            fprintf(stderr, "Warning: Could not read font file: %s\n", fontPath);
+            return 0;
+        }
+        font_data = ttf_buffer;
+        font_size = bytes_read;
     }
     
     // Bake font bitmap
-    int result = stbtt_BakeFontBitmap(ttf_buffer, 0, 32.0, font_bitmap, 
+    int result = stbtt_BakeFontBitmap(font_data, 0, 32.0, font_bitmap, 
                                       FONT_TEXTURE_SIZE, FONT_TEXTURE_SIZE, 
                                       FIRST_CHAR, NUM_CHARS, cdata);
     
@@ -69,7 +85,11 @@ int init_text_renderer(const char* fontPath) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     
     font_initialized = 1;
-    printf("Text renderer initialized successfully with font: %s\n", path);
+    if (fontPath == NULL) {
+        printf("Text renderer initialized successfully with embedded font\n");
+    } else {
+        printf("Text renderer initialized successfully with font: %s\n", fontPath);
+    }
     return 1;
 }
 

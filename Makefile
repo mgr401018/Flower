@@ -54,8 +54,17 @@ $(BUILD_DIR)/$(IMPORTS_DIR):
 $(BUILD_DIR)/$(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) -o $(BUILD_DIR)/$(TARGET) $(OBJS) $(LIBS)
 
+# Generate embedded font header from TTF file
+$(SRC_DIR)/embedded_font.h: $(IMPORTS_DIR)/DejaVuSansMono.ttf
+	xxd -i $< > $@
+
 # Compile source files to object files in build directory
 $(BUILD_DIR)/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+# text_renderer.c depends on embedded_font.h
+$(BUILD_DIR)/$(SRC_DIR)/text_renderer.o: $(SRC_DIR)/text_renderer.c $(SRC_DIR)/embedded_font.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 

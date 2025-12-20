@@ -1005,11 +1005,11 @@ int main(void) {
     glfwSetMouseButtonCallback(window, mouse_button_callback);
     glfwSetScrollCallback(window, scroll_callback);
     
-    // Initialize text renderer with DejaVu Sans Mono font
+    // Initialize text renderer with embedded DejaVu Sans Mono font
     int width, height;
     glfwGetWindowSize(window, &width, &height);
     text_renderer_set_window_size(width, height);
-    if (!init_text_renderer("imports/DejaVuSansMono.ttf")) {
+    if (!init_text_renderer(NULL)) {  // NULL = use embedded font
         fprintf(stderr, "Warning: Failed to initialize text renderer\n");
     }
     
