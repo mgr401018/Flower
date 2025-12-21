@@ -4,3 +4,7 @@ build/
 *.o
 *.exe
 triangle
+.cursor/
+.vscode/
+.idea/
+.atom/

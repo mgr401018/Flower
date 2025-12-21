@@ -58,12 +58,12 @@ void draw_block_process(const struct FlowNode *n) {
     }
     glEnd();
     
-    // Draw value text (starting a bit left of block center)
+    // Draw value text centered in the block
     if (n->value[0] != '\0') {
         float fontSize = n->height * 0.3f;
-        // Position text starting a bit left of block center
+        // Position text in the center of the block
         float textX = n->x - n->width * 0.3f;
-        float textY = n->y - fontSize * 0.25f;
+        float textY = n->y;
         draw_text(textX, textY, n->value, fontSize, 0.0f, 0.0f, 0.0f);
     }
 }

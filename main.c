@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <math.h>
 #include <string.h>
+#include <time.h>
 #define TINYFD_NOLIB
 #include "imports/tinyfiledialogs.h"
 #include "src/text_renderer.h"
@@ -26,6 +27,9 @@ double scrollOffsetY = 0.0;
 
 // Grid system
 const double GRID_CELL_SIZE = 0.5;
+
+// Flowchart scale factor (2/3 = 0.6667)
+const float FLOWCHART_SCALE = 0.6667f;
 
 // Circular button configuration (top-left corner, vertically aligned)
 const float buttonRadius = 0.04f;
@@ -108,10 +112,13 @@ typedef struct {
 PopupMenu popupMenu = {false, MENU_TYPE_CONNECTION, 0.0, 0.0, -1, -1};
 
 // Menu item dimensions
-const float menuItemHeight = 0.15f;
-const float menuItemSpacing = 0.02f;
-const float menuPadding = 0.04f;  // Padding on left and right of text (in normalized coordinates)
-const float menuMinWidth = 0.8f;  // Minimum menu width in normalized coordinates (~4 cm on typical screen)
+// Menu item dimensions - reduced sizes for better fit on larger window
+const float menuItemHeight = 0.12f;  // Reduced from 0.15f
+const float menuItemSpacing = 0.015f;  // Reduced from 0.02f
+const float menuPadding = 0.03f;  // Reduced from 0.04f
+// Original window was 800x600 (aspect 1.333), new is 1600x900 (aspect 1.778)
+// Scale menu width to maintain original appearance: 1.333/1.778 ≈ 0.75
+const float menuMinWidth = 0.6f * (1.333f / 1.778f);  // Scaled to maintain original size (reduced from 0.8f)
 
 // Menu items
 #define MAX_MENU_ITEMS 10
@@ -171,10 +178,13 @@ static double snap_to_grid_y(double y) {
 void cursor_position_callback(GLFWwindow* window, double xpos, double ypos) {
     int width, height;
     glfwGetWindowSize(window, &width, &height);
+    float aspectRatio = (float)width / (float)height;
     
-    // Convert screen coordinates to OpenGL coordinates (-1 to 1)
+    // Convert screen coordinates to OpenGL coordinates
+    // X maps to [-aspectRatio, aspectRatio] due to projection matrix
+    // Y maps to [-1, 1] (inverted)
     // Don't apply scroll offset here - we'll handle it where needed
-    cursorX = (xpos / width) * 2.0 - 1.0;
+    cursorX = (xpos / width) * 2.0 * aspectRatio - aspectRatio;
     cursorY = -((ypos / height) * 2.0 - 1.0);
 }
 
@@ -198,11 +208,9 @@ bool cursor_over_menu_item(double menuX, double menuY, int itemIndex) {
 
 // Check if cursor is over a circular button (with aspect ratio correction)
 bool cursor_over_button(float buttonX, float buttonY, GLFWwindow* window) {
-    int width, height;
-    glfwGetWindowSize(window, &width, &height);
-    float aspectRatio = (float)width / (float)height;
-    
-    float dx = (cursorX - buttonX) * aspectRatio;
+    // With new projection matrix, cursorX and buttonX are already in the same coordinate system
+    // No need to multiply by aspectRatio anymore
+    float dx = cursorX - buttonX;
     float dy = cursorY - buttonY;
     return sqrt(dx*dx + dy*dy) <= buttonRadius;
 }
@@ -1814,13 +1822,19 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
 void mouse_button_callback(GLFWwindow* window, int button, int action, int mods) {
     (void)mods;    // Mark as intentionally unused
     
-    // Calculate world-space cursor position (accounting for scroll)
-    double worldCursorX = cursorX - scrollOffsetX;
-    double worldCursorY = cursorY - scrollOffsetY;
+    // Calculate world-space cursor position (accounting for scroll and flowchart scale)
+    // Transformation: screen = scale * (world - scrollOffset/scale) = scale * world - scrollOffset
+    // So: world = (screen + scrollOffset) / scale
+    double worldCursorX = (cursorX + scrollOffsetX) / FLOWCHART_SCALE;
+    double worldCursorY = (cursorY + scrollOffsetY) / FLOWCHART_SCALE;
     
     if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
         // Check if clicking on buttons (buttons are in screen space, not world space)
-        if (cursor_over_button(buttonX, saveButtonY, window)) {
+        int width, height;
+        glfwGetWindowSize(window, &width, &height);
+        float aspectRatio = (float)width / (float)height;
+        float buttonX_scaled = buttonX * aspectRatio;
+        if (cursor_over_button(buttonX_scaled, saveButtonY, window)) {
             // Blue save button clicked - open save dialog
             const char* filters[] = {"*.txt", "*.flow"};
             const char* filename = tinyfd_saveFileDialog(
@@ -1834,7 +1848,7 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
             }
             return;
         }
-        if (cursor_over_button(buttonX, loadButtonY, window)) {
+        if (cursor_over_button(buttonX_scaled, loadButtonY, window)) {
             // Yellow load button clicked - open load dialog
             const char* filters[] = {"*.txt", "*.flow"};
             const char* filename = tinyfd_openFileDialog(
@@ -1944,35 +1958,47 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
 
 
 
-void drawPopupMenu();  // Forward declaration
+void drawPopupMenu(GLFWwindow* window);  // Forward declaration
 
 void drawFlowNode(const FlowNode *n) {
+    // #region agent log
+    static int log_count = 0;
+    if (log_count < 2) {
+        FILE* debug_log = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
+        if (debug_log) {
+            fprintf(debug_log, "{\"sessionId\":\"debug-session\",\"runId\":\"initial\",\"hypothesisId\":\"C\",\"location\":\"main.c:1949\",\"message\":\"Node dimensions\",\"data\":{\"nodeIndex\":%d,\"width\":%.3f,\"height\":%.3f,\"x\":%.3f,\"y\":%.3f},\"timestamp\":%ld}\n", log_count, n->width, n->height, n->x, n->y, (long)time(NULL));
+            fclose(debug_log);
+            log_count++;
+        }
+    }
+    // #endregion
+    
     // Route to appropriate block drawing function based on type
     if (n->type == NODE_START) {
         // Start node: green rounded rectangle
         glColor3f(0.3f, 0.9f, 0.3f); // green for start
-        
-        glBegin(GL_QUADS);
-        glVertex2f(n->x - n->width * 0.5f, n->y + n->height * 0.5f);
-        glVertex2f(n->x + n->width * 0.5f, n->y + n->height * 0.5f);
-        glVertex2f(n->x + n->width * 0.5f, n->y - n->height * 0.5f);
-        glVertex2f(n->x - n->width * 0.5f, n->y - n->height * 0.5f);
-        glEnd();
-        
-        // Border
-        glColor3f(0.2f, 0.2f, 0.0f);
-        glBegin(GL_LINE_LOOP);
-        glVertex2f(n->x - n->width * 0.5f, n->y + n->height * 0.5f);
-        glVertex2f(n->x + n->width * 0.5f, n->y + n->height * 0.5f);
-        glVertex2f(n->x + n->width * 0.5f, n->y - n->height * 0.5f);
-        glVertex2f(n->x - n->width * 0.5f, n->y - n->height * 0.5f);
-        glEnd();
-        
+    
+    glBegin(GL_QUADS);
+    glVertex2f(n->x - n->width * 0.5f, n->y + n->height * 0.5f);
+    glVertex2f(n->x + n->width * 0.5f, n->y + n->height * 0.5f);
+    glVertex2f(n->x + n->width * 0.5f, n->y - n->height * 0.5f);
+    glVertex2f(n->x - n->width * 0.5f, n->y - n->height * 0.5f);
+    glEnd();
+
+    // Border
+    glColor3f(0.2f, 0.2f, 0.0f);
+    glBegin(GL_LINE_LOOP);
+    glVertex2f(n->x - n->width * 0.5f, n->y + n->height * 0.5f);
+    glVertex2f(n->x + n->width * 0.5f, n->y + n->height * 0.5f);
+    glVertex2f(n->x + n->width * 0.5f, n->y - n->height * 0.5f);
+    glVertex2f(n->x - n->width * 0.5f, n->y - n->height * 0.5f);
+    glEnd();
+
         // Output connector (bottom) only
-        float r = 0.03f;
+    float r = 0.03f;
         float cx = (float)n->x;
         float cy = (float)(n->y - n->height * 0.5f);
-        glColor3f(0.1f, 0.1f, 0.1f);
+    glColor3f(0.1f, 0.1f, 0.1f);
         glBegin(GL_TRIANGLE_FAN);
         glVertex2f(cx, cy);
         for (int i = 0; i <= 20; ++i) {
@@ -1981,12 +2007,12 @@ void drawFlowNode(const FlowNode *n) {
         }
         glEnd();
         
-        // Draw value text if present (starting a bit left of block center)
+        // Draw value text if present centered in the block
         if (n->value[0] != '\0') {
             float fontSize = n->height * 0.3f;
-            // Position text starting a bit left of block center
+            // Position text in the center of the block
             float textX = n->x - n->width * 0.3f;
-            float textY = n->y - fontSize * 0.25f;
+            float textY = n->y;
             draw_text(textX, textY, n->value, fontSize, 0.0f, 0.0f, 0.0f);
         }
     } else if (n->type == NODE_END) {
@@ -2022,12 +2048,12 @@ void drawFlowNode(const FlowNode *n) {
         }
         glEnd();
         
-        // Draw value text if present (starting a bit left of block center)
+        // Draw value text if present centered in the block
         if (n->value[0] != '\0') {
             float fontSize = n->height * 0.3f;
-            // Position text starting a bit left of block center
+            // Position text in the center of the block
             float textX = n->x - n->width * 0.3f;
-            float textY = n->y - fontSize * 0.25f;
+            float textY = n->y;
             draw_text(textX, textY, n->value, fontSize, 0.0f, 0.0f, 0.0f);
         }
     } else if (n->type == NODE_PROCESS || n->type == NODE_NORMAL) {
@@ -2044,14 +2070,23 @@ void drawFlowNode(const FlowNode *n) {
     }
 }
 
-void drawFlowchart(void) {
+void drawFlowchart(GLFWwindow* window) {
     // Apply scroll transformation (both horizontal and vertical)
     glPushMatrix();
-    glTranslatef((float)scrollOffsetX, (float)scrollOffsetY, 0.0f);
+    // Scale down flowchart to 2/3 size for more screen space
+    // Apply scale first, then translate (OpenGL applies in reverse order: translate then scale)
+    // Transformation: screen = scale * (world - scrollOffset)
+    // When scrollOffset increases, world content moves left (negative direction)
+    // Since scrollOffset is in screen coordinates, we need to scale it for world coordinates
+    glScalef(FLOWCHART_SCALE, FLOWCHART_SCALE, 1.0f);
+    glTranslatef(-(float)scrollOffsetX / FLOWCHART_SCALE, -(float)scrollOffsetY / FLOWCHART_SCALE, 0.0f);
     
-    // Set scroll offsets in text renderer so block labels move with blocks
+    // Set scroll offsets and flowchart scale in text renderer so block labels move with blocks
     // (only while drawing blocks, not menus/buttons)
-    text_renderer_set_scroll_offsets(scrollOffsetX, scrollOffsetY);
+    // Text renderer applies: screen = FLOWCHART_SCALE * world - scrollOffset
+    // So we pass scrollOffset directly (not negated)
+    text_renderer_set_scroll_offsets((float)scrollOffsetX, (float)scrollOffsetY);
+    text_renderer_set_flowchart_scale(FLOWCHART_SCALE);
     
     // Draw connections as right-angle L-shapes
     glLineWidth(3.0f);
@@ -2074,10 +2109,10 @@ void drawFlowchart(void) {
         // Handle cases: same X (vertical only), same Y (horizontal only), different (L-shape)
         if (fabs(x1 - x2) < 0.001f) {
             // Same X: vertical line only
-            glBegin(GL_LINES);
-            glVertex2f(x1, y1);
-            glVertex2f(x2, y2);
-            glEnd();
+        glBegin(GL_LINES);
+        glVertex2f(x1, y1);
+        glVertex2f(x2, y2);
+        glEnd();
         } else if (fabs(y1 - y2) < 0.001f) {
             // Same Y: horizontal line only
             glBegin(GL_LINES);
@@ -2110,20 +2145,32 @@ void drawFlowchart(void) {
     
     // Reset scroll offsets to 0 for screen-space elements (menus, buttons)
     text_renderer_set_scroll_offsets(0.0, 0.0);
+    text_renderer_set_flowchart_scale(1.0f);  // No scaling for menus/buttons
     
     // Draw popup menu in screen space (not affected by scroll)
-    drawPopupMenu();
+    drawPopupMenu(window);
 }
 
-void drawPopupMenu() {
+void drawPopupMenu(GLFWwindow* window) {
     if (!popupMenu.active) return;
+    
+    // #region agent log
+    int debug_width, debug_height;
+    glfwGetWindowSize(window, &debug_width, &debug_height);
+    float debug_aspect = (float)debug_width / (float)debug_height;
+    FILE* debug_log = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
+    if (debug_log) {
+        fprintf(debug_log, "{\"sessionId\":\"debug-session\",\"runId\":\"initial\",\"hypothesisId\":\"B\",\"location\":\"main.c:2131\",\"message\":\"Menu dimensions before scaling\",\"data\":{\"menuMinWidth\":%.3f,\"menuItemHeight\":%.3f,\"aspectRatio\":%.3f},\"timestamp\":%ld}\n", menuMinWidth, menuItemHeight, debug_aspect, (long)time(NULL));
+        fclose(debug_log);
+    }
+    // #endregion
     
     // Menu is stored in screen space (not affected by scroll)
     float menuX = (float)popupMenu.x;
     float menuY = (float)popupMenu.y;
     
     // Calculate font size
-    float fontSize = menuItemHeight * 0.5f;
+    float fontSize = menuItemHeight * 0.45f;  // Slightly smaller for better fit
     float menuItemWidth = menuMinWidth;
     
     // Determine menu item count and items based on menu type
@@ -2214,16 +2261,20 @@ void drawButtons(GLFWwindow* window) {
     glfwGetWindowSize(window, &width, &height);
     float aspectRatio = (float)width / (float)height;
     
-    bool hoveringSave = cursor_over_button(buttonX, saveButtonY, window);
-    bool hoveringLoad = cursor_over_button(buttonX, loadButtonY, window);
+    // Convert button positions to new coordinate system (X is now -aspectRatio to aspectRatio)
+    // buttonX was -0.95 in old system (-1 to 1), now map to same visual position
+    float buttonX_scaled = buttonX * aspectRatio;
     
-    // Draw save button (blue)
+    bool hoveringSave = cursor_over_button(buttonX_scaled, saveButtonY, window);
+    bool hoveringLoad = cursor_over_button(buttonX_scaled, loadButtonY, window);
+    
+    // Draw save button (blue) - use same radius for X and Y to make it circular
     glColor3f(0.2f, 0.4f, 0.9f);
     glBegin(GL_TRIANGLE_FAN);
-    glVertex2f(buttonX, saveButtonY);
+    glVertex2f(buttonX_scaled, saveButtonY);
     for (int i = 0; i <= 20; ++i) {
         float angle = (float)i / 20.0f * 6.2831853f;
-        glVertex2f(buttonX + cosf(angle) * buttonRadius / aspectRatio, 
+        glVertex2f(buttonX_scaled + cosf(angle) * buttonRadius, 
                    saveButtonY + sinf(angle) * buttonRadius);
     }
     glEnd();
@@ -2233,18 +2284,18 @@ void drawButtons(GLFWwindow* window) {
     glBegin(GL_LINE_LOOP);
     for (int i = 0; i <= 20; ++i) {
         float angle = (float)i / 20.0f * 6.2831853f;
-        glVertex2f(buttonX + cosf(angle) * buttonRadius / aspectRatio, 
+        glVertex2f(buttonX_scaled + cosf(angle) * buttonRadius, 
                    saveButtonY + sinf(angle) * buttonRadius);
     }
     glEnd();
     
-    // Draw load button (yellow)
+    // Draw load button (yellow) - use same radius for X and Y to make it circular
     glColor3f(0.95f, 0.9f, 0.25f);
     glBegin(GL_TRIANGLE_FAN);
-    glVertex2f(buttonX, loadButtonY);
+    glVertex2f(buttonX_scaled, loadButtonY);
     for (int i = 0; i <= 20; ++i) {
         float angle = (float)i / 20.0f * 6.2831853f;
-        glVertex2f(buttonX + cosf(angle) * buttonRadius / aspectRatio, 
+        glVertex2f(buttonX_scaled + cosf(angle) * buttonRadius, 
                    loadButtonY + sinf(angle) * buttonRadius);
     }
     glEnd();
@@ -2254,18 +2305,18 @@ void drawButtons(GLFWwindow* window) {
     glBegin(GL_LINE_LOOP);
     for (int i = 0; i <= 20; ++i) {
         float angle = (float)i / 20.0f * 6.2831853f;
-        glVertex2f(buttonX + cosf(angle) * buttonRadius / aspectRatio, 
+        glVertex2f(buttonX_scaled + cosf(angle) * buttonRadius, 
                    loadButtonY + sinf(angle) * buttonRadius);
     }
     glEnd();
     
-    // Draw hover labels
-    if (hoveringSave) {
-        // Draw label background
-        float labelX = buttonX + buttonRadius / aspectRatio + 0.05f;
-        float labelY = saveButtonY;
-        float labelWidth = 0.15f;
-        float labelHeight = 0.06f;
+        // Draw hover labels
+        if (hoveringSave) {
+            // Draw label background
+            float labelX = buttonX_scaled + buttonRadius + 0.05f;
+            float labelY = saveButtonY;
+            float labelWidth = 0.15f;
+            float labelHeight = 0.06f;
         
         glColor3f(0.1f, 0.1f, 0.15f);
         glBegin(GL_QUADS);
@@ -2285,7 +2336,7 @@ void drawButtons(GLFWwindow* window) {
         glEnd();
         
         // Draw "SAVE" text using real font (centered in the box)
-        float fontSize = labelHeight * 0.8f;  // Use 80% of label height for better visibility
+        float fontSize = labelHeight * 0.65f;  // Reduced from 0.8f for better fit
         float textWidth = get_text_width("SAVE", fontSize);
         // Center horizontally:
         float textX = labelX + (labelWidth - textWidth) * 0.25f;
@@ -2296,7 +2347,7 @@ void drawButtons(GLFWwindow* window) {
     
     if (hoveringLoad) {
         // Draw label background
-        float labelX = buttonX + buttonRadius / aspectRatio + 0.05f;
+        float labelX = buttonX_scaled + buttonRadius + 0.05f;
         float labelY = loadButtonY;
         float labelWidth = 0.15f;
         float labelHeight = 0.06f;
@@ -2319,7 +2370,7 @@ void drawButtons(GLFWwindow* window) {
         glEnd();
         
         // Draw "LOAD" text using real font (centered in the box)
-        float fontSize = labelHeight * 0.8f;  // Use 80% of label height for better visibility
+        float fontSize = labelHeight * 0.65f;  // Reduced from 0.8f for better fit
         float textWidth = get_text_width("LOAD", fontSize);
         // Center horizontally
         float textX = labelX + (labelWidth - textWidth) *0.25f;
@@ -2362,7 +2413,7 @@ int main(void) {
         return -1;
     }
 
-    window = glfwCreateWindow(800, 600, "Flowchart Editor", NULL, NULL);
+    window = glfwCreateWindow(1600, 900, "Flowchart Editor", NULL, NULL);
     if (!window) {
         fprintf(stderr, "Failed to create GLFW window\n");
         glfwTerminate();
@@ -2380,6 +2431,9 @@ int main(void) {
     int width, height;
     glfwGetWindowSize(window, &width, &height);
     text_renderer_set_window_size(width, height);
+    float initialAspectRatio = (float)width / (float)height;
+    text_renderer_set_aspect_ratio(initialAspectRatio);
+    text_renderer_set_y_scale(1.0f);  // No Y scaling needed
     if (!init_text_renderer(NULL)) {  // NULL = use embedded font
         fprintf(stderr, "Warning: Failed to initialize text renderer\n");
     }
@@ -2390,15 +2444,49 @@ int main(void) {
     while (!glfwWindowShouldClose(window)) {
         glClear(GL_COLOR_BUFFER_BIT);
         
+        // #region agent log
+        int debug_width, debug_height;
+        glfwGetWindowSize(window, &debug_width, &debug_height);
+        float debug_aspect = (float)debug_width / (float)debug_height;
+        FILE* debug_log = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
+        if (debug_log) {
+            fprintf(debug_log, "{\"sessionId\":\"debug-session\",\"runId\":\"post-fix\",\"hypothesisId\":\"A\",\"location\":\"main.c:2415\",\"message\":\"Window size and aspect ratio after fix\",\"data\":{\"width\":%d,\"height\":%d,\"aspectRatio\":%.3f},\"timestamp\":%ld}\n", debug_width, debug_height, debug_aspect, (long)time(NULL));
+            fclose(debug_log);
+        }
+        // #endregion
+        
+        // Set up viewport and projection matrix to account for aspect ratio
+        int width, height;
+        glfwGetWindowSize(window, &width, &height);
+        glViewport(0, 0, width, height);
+        
+        glMatrixMode(GL_PROJECTION);
+        glLoadIdentity();
+        float aspectRatio = (float)width / (float)height;
+        // Use orthographic projection that accounts for aspect ratio
+        // This prevents horizontal stretching on wider windows
+        // Keep Y range as -1 to 1 to maintain proper vertical proportions
+        glOrtho(-aspectRatio, aspectRatio, -1.0, 1.0, -1.0, 1.0);
+        
+        // Update text renderer with current aspect ratio
+        text_renderer_set_aspect_ratio(aspectRatio);
+        text_renderer_set_y_scale(1.0f);  // No Y scaling needed
+        
+        glMatrixMode(GL_MODELVIEW);
+        glLoadIdentity();
+        
         // Update hovered connection (use world-space cursor)
-        double worldCursorX = cursorX - scrollOffsetX;
-        double worldCursorY = cursorY - scrollOffsetY;
+        // Transformation: screen = scale * (world - scrollOffset/scale) = scale * world - scrollOffset
+        // So: world = (screen + scrollOffset) / scale
+        double worldCursorX = (cursorX + scrollOffsetX) / FLOWCHART_SCALE;
+        double worldCursorY = (cursorY + scrollOffsetY) / FLOWCHART_SCALE;
         hoveredConnection = hit_connection(worldCursorX, worldCursorY, 0.05f);
         
-        drawFlowchart();
+        drawFlowchart(window);
         
-        // Ensure scroll offsets are 0 for buttons (already reset in drawFlowchart, but be safe)
+        // Ensure scroll offsets and flowchart scale are reset for buttons (already reset in drawFlowchart, but be safe)
         text_renderer_set_scroll_offsets(0.0, 0.0);
+        text_renderer_set_flowchart_scale(1.0f);
         
         // Draw buttons in screen space (not affected by scroll)
         drawButtons(window);

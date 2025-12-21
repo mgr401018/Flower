@@ -20,6 +20,9 @@ static int window_height = 600;
 static int font_initialized = 0;
 static double scroll_offset_x = 0.0;
 static double scroll_offset_y = 0.0;
+static float aspect_ratio = 1.333f;  // Default to 800/600
+static float y_scale = 1.0f;  // Y scaling factor to maintain original proportions
+static float flowchart_scale = 1.0f;  // Flowchart scale factor (for block labels only)
 
 // Set window dimensions (call when window is created or resized)
 void text_renderer_set_window_size(int width, int height) {
@@ -31,6 +34,21 @@ void text_renderer_set_window_size(int width, int height) {
 void text_renderer_set_scroll_offsets(double offsetX, double offsetY) {
     scroll_offset_x = offsetX;
     scroll_offset_y = offsetY;
+}
+
+// Set aspect ratio (call when window size changes)
+void text_renderer_set_aspect_ratio(float aspectRatio) {
+    aspect_ratio = aspectRatio;
+}
+
+// Set Y scale (call when window size changes to maintain original proportions)
+void text_renderer_set_y_scale(float yScale) {
+    y_scale = yScale;
+}
+
+// Set flowchart scale (for scaling block labels, not menu/button labels)
+void text_renderer_set_flowchart_scale(float scale) {
+    flowchart_scale = scale;
 }
 
 int init_text_renderer(const char* fontPath) {
@@ -126,7 +144,8 @@ float get_text_width(const char* text, float fontSize) {
     }
     
     // Convert from pixel coordinates to normalized coordinates
-    return (width / window_width) * 2.0f;
+    // Account for aspect ratio: X range is now [-aspectRatio, aspectRatio]
+    return (width / window_width) * 2.0f * aspect_ratio;
 }
 
 float draw_text(float x, float y, const char* text, float fontSize, float r, float g, float b) {
@@ -138,7 +157,9 @@ float draw_text(float x, float y, const char* text, float fontSize, float r, flo
     // fontSize is in normalized coordinates (typically 0.01-0.1), convert to pixels
     // Normalized coordinates go from -1 to 1, so total range is 2.0
     // For height, we use window_height to convert
-    float fontSizePixels = (fontSize * window_height) / 2.0f;  // Convert normalized height to pixels
+    // Apply flowchart scale to fontSize for block labels (but not menu/button labels)
+    float fontSizeScaled = fontSize * flowchart_scale;
+    float fontSizePixels = (fontSizeScaled * window_height) / 2.0f;  // Convert normalized height to pixels
     if (fontSizePixels < 12.0f) fontSizePixels = 18.0f;  // Minimum readable size
     
     // Save current matrices
@@ -156,11 +177,18 @@ float draw_text(float x, float y, const char* text, float fontSize, float r, flo
     glLoadIdentity();
     
     // Convert normalized coordinates to pixel coordinates
-    // Apply scroll offsets to move text with blocks
-    float world_x = (float)(x + scroll_offset_x);
-    float world_y = (float)(y + scroll_offset_y);
-    float pixel_x = ((world_x + 1.0f) / 2.0f) * window_width;
-    float pixel_y = ((1.0f - world_y) / 2.0f) * window_height;
+    // Apply the same transformation as OpenGL: screen = FLOWCHART_SCALE * world - scrollOffset
+    // x, y are in world coordinates (normalized)
+    // scroll_offset_x and scroll_offset_y are already negative (set as -scrollOffsetX in main.c)
+    // So: screen = FLOWCHART_SCALE * world - (-scrollOffset) = FLOWCHART_SCALE * world + scrollOffset
+    // But we want: screen = FLOWCHART_SCALE * world - scrollOffset
+    // So we need to negate the scroll offsets: screen = FLOWCHART_SCALE * world - (-scroll_offset)
+    float screen_normalized_x = flowchart_scale * (float)x - (float)scroll_offset_x;
+    float screen_normalized_y = flowchart_scale * (float)y - (float)scroll_offset_y;
+    // X coordinate is in range [-aspectRatio, aspectRatio]
+    // Y coordinate is in range [-1, 1]
+    float pixel_x = ((screen_normalized_x / aspect_ratio + 1.0f) / 2.0f) * window_width;
+    float pixel_y = ((1.0f - screen_normalized_y) / 2.0f) * window_height;
     
     float scale = fontSizePixels / 32.0f;  // 32.0 is the baked font size
     float start_x = pixel_x;

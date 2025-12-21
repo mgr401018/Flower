@@ -22,6 +22,9 @@ void text_renderer_set_window_size(int width, int height);
 
 // Set scroll offsets (call before drawing text that should scroll with content)
 void text_renderer_set_scroll_offsets(double offsetX, double offsetY);
+void text_renderer_set_aspect_ratio(float aspectRatio);
+void text_renderer_set_y_scale(float yScale);
+void text_renderer_set_flowchart_scale(float scale);
 
 #endif // TEXT_RENDERER_H
 
