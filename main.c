@@ -7,6 +7,11 @@
 #define TINYFD_NOLIB
 #include "imports/tinyfiledialogs.h"
 #include "src/text_renderer.h"
+#include "src/block_process.h"
+#include "src/block_input.h"
+#include "src/block_output.h"
+#include "src/block_assignment.h"
+#include "src/block_declare.h"
 
 // Global variables for cursor position
 double cursorX = 0.0;
@@ -31,19 +36,27 @@ const float loadButtonY = 0.8f;   // Yellow load button
 // Flowchart node and connection data
 #define MAX_NODES 100
 #define MAX_CONNECTIONS 200
+#define MAX_VALUE_LENGTH 256
+#define MAX_VARIABLES 200
+#define MAX_VAR_NAME_LENGTH 64
 
 typedef enum {
-    NODE_NORMAL = 0,
+    NODE_NORMAL = 0,    // Deprecated, maps to NODE_PROCESS
     NODE_START  = 1,
-    NODE_END    = 2
+    NODE_END    = 2,
+    NODE_PROCESS = 3,
+    NODE_INPUT = 4,
+    NODE_OUTPUT = 5,
+    NODE_ASSIGNMENT = 6,
+    NODE_DECLARE = 7
 } NodeType;
 
-typedef struct {
+typedef struct FlowNode {
     double x;
     double y;
     float width;
     float height;
-    int value;
+    char value[MAX_VALUE_LENGTH];
     NodeType type;
 } FlowNode;
 
@@ -57,6 +70,24 @@ int nodeCount = 0;
 
 Connection connections[MAX_CONNECTIONS];
 int connectionCount = 0;
+
+// Variable tracking system
+typedef enum {
+    VAR_TYPE_INT = 0,
+    VAR_TYPE_REAL = 1,
+    VAR_TYPE_STRING = 2,
+    VAR_TYPE_BOOL = 3
+} VariableType;
+
+typedef struct {
+    char name[MAX_VAR_NAME_LENGTH];
+    VariableType type;
+    bool is_array;
+    int array_size;  // Size of array (0 if not an array or size not specified)
+} Variable;
+
+Variable variables[MAX_VARIABLES];
+int variableCount = 0;
 
 // Popup menu types
 typedef enum {
@@ -91,10 +122,13 @@ typedef struct {
 
 // Connection menu items (for inserting nodes)
 MenuItem connectionMenuItems[] = {
-    {"Process Node", NODE_NORMAL},
-    {"Placeholder", NODE_NORMAL}
+    {"Process", NODE_PROCESS},
+    {"Input", NODE_INPUT},
+    {"Output", NODE_OUTPUT},
+    {"Assignment", NODE_ASSIGNMENT},
+    {"Declare", NODE_DECLARE}
 };
-int connectionMenuItemCount = 2;
+int connectionMenuItemCount = 5;
 
 // Node menu items (for node operations)
 typedef struct {
@@ -281,11 +315,22 @@ void save_flowchart(const char* filename) {
     }
     
     // Write node data
-    fprintf(file, "# Node data: x y width height value type\n");
+    fprintf(file, "# Node data: x y width height type \"value_string\"\n");
     for (int i = 0; i < nodeCount; i++) {
-        fprintf(file, "%.6f %.6f %.6f %.6f %d %d\n",
+        // Escape quotes in value string
+        char escaped_value[MAX_VALUE_LENGTH * 2]; // Worst case: all chars are quotes
+        int j = 0;
+        for (int k = 0; nodes[i].value[k] != '\0' && j < (int)(sizeof(escaped_value) - 1); k++) {
+            if (nodes[i].value[k] == '"') {
+                escaped_value[j++] = '\\';
+            }
+            escaped_value[j++] = nodes[i].value[k];
+        }
+        escaped_value[j] = '\0';
+        
+        fprintf(file, "%.6f %.6f %.6f %.6f %d \"%s\"\n",
                 nodes[i].x, nodes[i].y, nodes[i].width, nodes[i].height,
-                nodes[i].value, (int)nodes[i].type);
+                (int)nodes[i].type, escaped_value);
     }
     
     fclose(file);
@@ -337,16 +382,69 @@ void load_flowchart(const char* filename) {
     nodeCount = 0;
     for (int i = 0; i < loadedNodeCount; i++) {
         int nodeType;
-        if (fscanf(file, "%lf %lf %f %f %d %d",
-                   &nodes[i].x, &nodes[i].y, &nodes[i].width, &nodes[i].height,
-                   &nodes[i].value, &nodeType) != 6) {
+        double x, y;
+        float width, height;
+        
+        // Read x, y, width, height, type
+        if (fscanf(file, "%lf %lf %f %f %d", &x, &y, &width, &height, &nodeType) != 5) {
             fprintf(stderr, "Error reading node data\n");
             fclose(file);
             return;
         }
+        
+        // Skip whitespace before quoted string
+        int c;
+        while ((c = fgetc(file)) != EOF && (c == ' ' || c == '\t'));
+        
+        if (c == '"') {
+            // Read quoted string
+            int j = 0;
+            bool escaped = false;
+            while (j < MAX_VALUE_LENGTH - 1) {
+                c = fgetc(file);
+                if (c == EOF) break;
+                
+                if (escaped) {
+                    if (c == '"') {
+                        nodes[i].value[j++] = '"';
+                    } else if (c == '\\') {
+                        nodes[i].value[j++] = '\\';
+                    } else {
+                        nodes[i].value[j++] = c;
+                    }
+                    escaped = false;
+                } else if (c == '\\') {
+                    escaped = true;
+                } else if (c == '"') {
+                    // End of quoted string
+                    break;
+                } else {
+                    nodes[i].value[j++] = c;
+                }
+            }
+            nodes[i].value[j] = '\0';
+            
+            // Skip rest of line
+            while ((c = fgetc(file)) != EOF && c != '\n');
+        } else {
+            // Old format or no value - set empty string
+            nodes[i].value[0] = '\0';
+            // If we read something that wasn't a quote, it might be old format value
+            // Try to read it as integer for backward compatibility
+            if (c != EOF && c != '\n') {
+                ungetc(c, file);
+                int oldValue;
+                if (fscanf(file, "%d", &oldValue) == 1) {
+                    // Old format had integer value, ignore it
+                }
+            }
+        }
+        
         // Snap loaded nodes to grid
-        nodes[i].x = snap_to_grid_x(nodes[i].x);
-        nodes[i].y = snap_to_grid_y(nodes[i].y);
+        nodes[i].x = snap_to_grid_x(x);
+        nodes[i].y = snap_to_grid_y(y);
+        nodes[i].width = width;
+        nodes[i].height = height;
         nodes[i].type = (NodeType)nodeType;
         nodeCount++;
     }
@@ -366,6 +464,9 @@ void load_flowchart(const char* filename) {
     fclose(file);
     printf("Flowchart loaded from %s (%d nodes, %d connections)\n", 
            filename, nodeCount, connectionCount);
+    
+    // Rebuild variable table after loading
+    rebuild_variable_table();
 }
 // Delete a node and reconnect adjacent nodes automatically
 void delete_node(int nodeIndex) {
@@ -526,6 +627,1141 @@ void delete_node(int nodeIndex) {
         nodes[i] = nodes[i + 1];
     }
     nodeCount--;
+    
+    // Rebuild variable table after deletion
+    rebuild_variable_table();
+}
+
+// Forward declarations
+void rebuild_variable_table(void);
+static bool parse_declare_block(const char* value, char* varName, VariableType* varType, bool* isArray, int* arraySize);
+static bool parse_assignment(const char* value, char* leftVar, char* rightValue, bool* isRightVar);
+static VariableType detect_literal_type(const char* value);
+static bool parse_array_access(const char* expr, char* arrayName, char* indexExpr);
+static bool evaluate_index_expression(const char* indexExpr, int* result, char* errorMsg);
+static bool check_array_bounds(const char* arrayName, const char* indexExpr, char* errorMsg);
+static void extract_array_accesses(const char* expr, char arrayNames[][MAX_VAR_NAME_LENGTH], 
+                                   char indexExprs[][MAX_VALUE_LENGTH], int* accessCount);
+static void extract_variables_from_expression_simple(const char* expr, char varNames[][MAX_VAR_NAME_LENGTH], int* varCount);
+
+// Find variable by name
+static Variable* find_variable(const char* name) {
+    for (int i = 0; i < variableCount; i++) {
+        if (strcmp(variables[i].name, name) == 0) {
+            return &variables[i];
+        }
+    }
+    return NULL;
+}
+
+// Validate variable name (must start with letter/underscore, then alphanumeric/underscore)
+static bool is_valid_variable_name(const char* name) {
+    if (!name || name[0] == '\0') return false;
+    
+    // First character must be letter or underscore
+    char first = name[0];
+    if (!((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || first == '_')) {
+        return false;
+    }
+    
+    // Rest must be alphanumeric or underscore
+    for (int i = 1; name[i] != '\0'; i++) {
+        char c = name[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || 
+              (c >= '0' && c <= '9') || c == '_')) {
+            return false;
+        }
+    }
+    
+    return true;
+}
+
+// Check if variable name already exists
+static bool variable_name_exists(const char* name, int excludeNodeIndex) {
+    for (int i = 0; i < nodeCount; i++) {
+        if (i == excludeNodeIndex) continue;
+        if (nodes[i].type == NODE_DECLARE) {
+            char varName[MAX_VAR_NAME_LENGTH];
+            VariableType varType;
+            bool isArray;
+            int arraySize;
+            if (parse_declare_block(nodes[i].value, varName, &varType, &isArray, &arraySize)) {
+                if (strcmp(varName, name) == 0) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+// Extract all variable names from an expression (including array names from array accesses)
+static void extract_variables_from_expression(const char* expr, char varNames[][MAX_VAR_NAME_LENGTH], int* varCount) {
+    *varCount = 0;
+    if (!expr || expr[0] == '\0') return;
+    
+    // First, extract array accesses
+    char arrayNames[MAX_VARIABLES][MAX_VAR_NAME_LENGTH];
+    char indexExprs[MAX_VARIABLES][MAX_VALUE_LENGTH];
+    int arrayAccessCount = 0;
+    extract_array_accesses(expr, arrayNames, indexExprs, &arrayAccessCount);
+    
+    // Add array names to variable list
+    for (int i = 0; i < arrayAccessCount; i++) {
+        bool found = false;
+        for (int j = 0; j < *varCount; j++) {
+            if (strcmp(varNames[j], arrayNames[i]) == 0) {
+                found = true;
+                break;
+            }
+        }
+        if (!found && *varCount < MAX_VARIABLES) {
+            strncpy(varNames[*varCount], arrayNames[i], MAX_VAR_NAME_LENGTH - 1);
+            varNames[*varCount][MAX_VAR_NAME_LENGTH - 1] = '\0';
+            (*varCount)++;
+        }
+    }
+    
+    // Also extract index variables from array index expressions
+    for (int i = 0; i < arrayAccessCount; i++) {
+        char indexVars[MAX_VARIABLES][MAX_VAR_NAME_LENGTH];
+        int indexVarCount = 0;
+        extract_variables_from_expression_simple(indexExprs[i], indexVars, &indexVarCount);
+        
+        for (int j = 0; j < indexVarCount; j++) {
+            bool found = false;
+            for (int k = 0; k < *varCount; k++) {
+                if (strcmp(varNames[k], indexVars[j]) == 0) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found && *varCount < MAX_VARIABLES) {
+                strncpy(varNames[*varCount], indexVars[j], MAX_VAR_NAME_LENGTH - 1);
+                varNames[*varCount][MAX_VAR_NAME_LENGTH - 1] = '\0';
+                (*varCount)++;
+            }
+        }
+    }
+    
+    // Then extract simple variables (not in array accesses)
+    char buffer[MAX_VALUE_LENGTH];
+    strncpy(buffer, expr, MAX_VALUE_LENGTH - 1);
+    buffer[MAX_VALUE_LENGTH - 1] = '\0';
+    
+    const char* p = buffer;
+    while (*p != '\0' && *varCount < MAX_VARIABLES) {
+        // Skip whitespace and operators
+        while (*p == ' ' || *p == '\t' || *p == '+' || *p == '-' || *p == '*' || 
+               *p == '/' || *p == '(' || *p == ')' || *p == '=') {
+            p++;
+        }
+        
+        // Skip array accesses (we already handled them)
+        if (*p == '[') {
+            // Skip to matching ']'
+            p++;
+            while (*p != '\0' && *p != ']') {
+                if (*p == '"') {
+                    p++;
+                    while (*p != '\0' && *p != '"') {
+                        if (*p == '\\' && p[1] != '\0') p++;
+                        p++;
+                    }
+                    if (*p == '"') p++;
+                } else {
+                    p++;
+                }
+            }
+            if (*p == ']') p++;
+            continue;
+        }
+        
+        if (*p == '\0') break;
+        
+        // Check if it starts with letter/underscore (potential variable)
+        if ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || *p == '_') {
+            int len = 0;
+            char varName[MAX_VAR_NAME_LENGTH];
+            const char* start = p;
+            
+            // Extract identifier
+            while ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || 
+                   (*p >= '0' && *p <= '9') || *p == '_') {
+                if (len < MAX_VAR_NAME_LENGTH - 1) {
+                    varName[len++] = *p++;
+                } else {
+                    break;
+                }
+            }
+            varName[len] = '\0';
+            
+            // Check if next char is '[' - if so, it's an array access we already handled
+            if (*p == '[') {
+                // Skip the array access
+                p++;
+                while (*p != '\0' && *p != ']') {
+                    if (*p == '"') {
+                        p++;
+                        while (*p != '\0' && *p != '"') {
+                            if (*p == '\\' && p[1] != '\0') p++;
+                            p++;
+                        }
+                        if (*p == '"') p++;
+                    } else {
+                        p++;
+                    }
+                }
+                if (*p == ']') p++;
+                continue;
+            }
+            
+            // Check if it's a valid variable name
+            if (len > 0 && is_valid_variable_name(varName)) {
+                // Check if already in list
+                bool found = false;
+                for (int i = 0; i < *varCount; i++) {
+                    if (strcmp(varNames[i], varName) == 0) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    strncpy(varNames[*varCount], varName, MAX_VAR_NAME_LENGTH - 1);
+                    varNames[*varCount][MAX_VAR_NAME_LENGTH - 1] = '\0';
+                    (*varCount)++;
+                }
+            }
+        } else {
+            p++;
+        }
+    }
+}
+
+// Simple variable extraction (for index expressions)
+static void extract_variables_from_expression_simple(const char* expr, char varNames[][MAX_VAR_NAME_LENGTH], int* varCount) {
+    *varCount = 0;
+    if (!expr || expr[0] == '\0') return;
+    
+    const char* p = expr;
+    while (*p != '\0' && *varCount < MAX_VARIABLES) {
+        // Skip whitespace and operators
+        while (*p == ' ' || *p == '\t' || *p == '+' || *p == '-' || *p == '*' || 
+               *p == '/' || *p == '(' || *p == ')') {
+            p++;
+        }
+        
+        if (*p == '\0') break;
+        
+        // Check if it starts with letter/underscore (potential variable)
+        if ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || *p == '_') {
+            int len = 0;
+            char varName[MAX_VAR_NAME_LENGTH];
+            
+            // Extract identifier
+            while ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || 
+                   (*p >= '0' && *p <= '9') || *p == '_') {
+                if (len < MAX_VAR_NAME_LENGTH - 1) {
+                    varName[len++] = *p++;
+                } else {
+                    break;
+                }
+            }
+            varName[len] = '\0';
+            
+            // Check if it's a valid variable name
+            if (len > 0 && is_valid_variable_name(varName)) {
+                // Check if already in list
+                bool found = false;
+                for (int i = 0; i < *varCount; i++) {
+                    if (strcmp(varNames[i], varName) == 0) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    strncpy(varNames[*varCount], varName, MAX_VAR_NAME_LENGTH - 1);
+                    varNames[*varCount][MAX_VAR_NAME_LENGTH - 1] = '\0';
+                    (*varCount)++;
+                }
+            }
+        } else {
+            p++;
+        }
+    }
+}
+
+// Parse array access (format: "arr[index]" or "arr[i]")
+// Returns true if it's an array access, extracts array name and index expression
+static bool parse_array_access(const char* expr, char* arrayName, char* indexExpr) {
+    if (!expr || expr[0] == '\0') return false;
+    
+    const char* p = expr;
+    // Skip whitespace
+    while (*p == ' ' || *p == '\t') p++;
+    
+    // Extract array name (must be valid identifier)
+    int nameLen = 0;
+    if ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || *p == '_') {
+        while ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || 
+               (*p >= '0' && *p <= '9') || *p == '_') {
+            if (nameLen < MAX_VAR_NAME_LENGTH - 1) {
+                arrayName[nameLen++] = *p++;
+            } else {
+                return false;
+            }
+        }
+        arrayName[nameLen] = '\0';
+        
+        // Check for '['
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '[') {
+            p++; // Skip '['
+            // Extract index expression until ']'
+            int indexLen = 0;
+            while (*p != '\0' && *p != ']' && indexLen < MAX_VALUE_LENGTH - 1) {
+                indexExpr[indexLen++] = *p++;
+            }
+            indexExpr[indexLen] = '\0';
+            
+            if (*p == ']') {
+                return true;
+            }
+        }
+    }
+    
+    return false;
+}
+
+// Evaluate index expression to get integer value (for bounds checking)
+// Handles: literals, variables, simple arithmetic (i+1, i-1, etc.)
+static bool evaluate_index_expression(const char* indexExpr, int* result, char* errorMsg) {
+    if (!indexExpr || indexExpr[0] == '\0') {
+        strcpy(errorMsg, "Index expression is empty");
+        return false;
+    }
+    
+    // Try to parse as integer literal first
+    char* endptr;
+    long val = strtol(indexExpr, &endptr, 10);
+    if (*endptr == '\0') {
+        // It's a literal integer
+        *result = (int)val;
+        return true;
+    }
+    
+    // Check if it's a variable name
+    if (is_valid_variable_name(indexExpr)) {
+        Variable* var = find_variable(indexExpr);
+        if (!var) {
+            snprintf(errorMsg, MAX_VALUE_LENGTH, "Index variable '%s' is not declared", indexExpr);
+            return false;
+        }
+        if (var->type != VAR_TYPE_INT) {
+            snprintf(errorMsg, MAX_VALUE_LENGTH, "Index variable '%s' must be of type int", indexExpr);
+            return false;
+        }
+        // For now, we can't evaluate variable values at compile time
+        // So we'll return a placeholder and check bounds at runtime conceptually
+        // For validation, we'll just check the variable exists and is int
+        *result = 0; // Placeholder - actual bounds check would need runtime evaluation
+        return true;
+    }
+    
+    // Try to parse simple arithmetic (i+1, i-1, etc.)
+    // Look for pattern: variable +/- number
+    const char* p = indexExpr;
+    while (*p == ' ' || *p == '\t') p++;
+    
+    // Extract variable name
+    char varName[MAX_VAR_NAME_LENGTH];
+    int nameLen = 0;
+    while ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || 
+           (*p >= '0' && *p <= '9') || *p == '_') {
+        if (nameLen < MAX_VAR_NAME_LENGTH - 1) {
+            varName[nameLen++] = *p++;
+        } else {
+            break;
+        }
+    }
+    varName[nameLen] = '\0';
+    
+    if (nameLen > 0 && is_valid_variable_name(varName)) {
+        Variable* var = find_variable(varName);
+        if (!var) {
+            snprintf(errorMsg, MAX_VALUE_LENGTH, "Index variable '%s' is not declared", varName);
+            return false;
+        }
+        if (var->type != VAR_TYPE_INT) {
+            snprintf(errorMsg, MAX_VALUE_LENGTH, "Index variable '%s' must be of type int", varName);
+            return false;
+        }
+        
+        // Skip whitespace
+        while (*p == ' ' || *p == '\t') p++;
+        
+        // Check for + or -
+        if (*p == '+' || *p == '-') {
+            char op = *p++;
+            while (*p == ' ' || *p == '\t') p++;
+            
+            // Try to parse number
+            long offset = strtol(p, &endptr, 10);
+            if (*endptr == '\0' || (*endptr == ' ' && endptr[1] == '\0')) {
+                // Valid arithmetic expression
+                *result = (op == '+') ? (int)offset : -(int)offset;
+                return true;
+            }
+        } else if (*p == '\0') {
+            // Just a variable
+            *result = 0; // Placeholder
+            return true;
+        }
+    }
+    
+    strcpy(errorMsg, "Invalid index expression. Must be integer literal, int variable, or int variable +/- number");
+    return false;
+}
+
+// Check array bounds for array access
+static bool check_array_bounds(const char* arrayName, const char* indexExpr, char* errorMsg) {
+    Variable* var = find_variable(arrayName);
+    if (!var || !var->is_array) {
+        snprintf(errorMsg, MAX_VALUE_LENGTH, "Variable '%s' is not an array", arrayName);
+        return false;
+    }
+    
+    if (var->array_size <= 0) {
+        // Array size not specified, can't check bounds
+        return true;
+    }
+    
+    int indexValue;
+    if (!evaluate_index_expression(indexExpr, &indexValue, errorMsg)) {
+        return false;
+    }
+    
+    // For variable indices, we can't check bounds at compile time
+    // But we validate the variable exists and is int type
+    if (is_valid_variable_name(indexExpr)) {
+        // It's a variable - already validated in evaluate_index_expression
+        return true;
+    }
+    
+    // For literal indices, check bounds
+    if (indexValue < 0 || indexValue >= var->array_size) {
+        snprintf(errorMsg, MAX_VALUE_LENGTH, 
+            "Array index %d is out of bounds. Array '%s' has size %d (valid indices: 0-%d)",
+            indexValue, arrayName, var->array_size, var->array_size - 1);
+        return false;
+    }
+    
+    return true;
+}
+
+// Extract all array accesses from an expression (e.g., "arr[i] = arr[i-1]")
+static void extract_array_accesses(const char* expr, char arrayNames[][MAX_VAR_NAME_LENGTH], 
+                                   char indexExprs[][MAX_VALUE_LENGTH], int* accessCount) {
+    *accessCount = 0;
+    if (!expr || expr[0] == '\0') return;
+    
+    const char* p = expr;
+    while (*p != '\0' && *accessCount < MAX_VARIABLES) {
+        // Look for array access pattern: identifier[
+        while (*p != '\0' && *p != '[') {
+            // Skip quoted strings
+            if (*p == '"') {
+                p++;
+                while (*p != '\0' && *p != '"') {
+                    if (*p == '\\' && p[1] != '\0') p++;
+                    p++;
+                }
+                if (*p == '"') p++;
+            } else {
+                p++;
+            }
+        }
+        
+        if (*p == '\0') break;
+        
+        // Found '[', now backtrack to find array name
+        const char* bracketPos = p;
+        p--; // Move back before '['
+        
+        // Skip whitespace
+        while (p > expr && (*p == ' ' || *p == '\t')) p--;
+        
+        // Extract array name backwards
+        int nameEnd = p - expr;
+        while (p >= expr && ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || 
+               (*p >= '0' && *p <= '9') || *p == '_')) {
+            p--;
+        }
+        p++; // Move to start of name
+        
+        int nameStart = p - expr;
+        if (nameStart < nameEnd) {
+            // Extract array name
+            int nameLen = nameEnd - nameStart + 1;
+            if (nameLen < MAX_VAR_NAME_LENGTH) {
+                strncpy(arrayNames[*accessCount], expr + nameStart, nameLen);
+                arrayNames[*accessCount][nameLen] = '\0';
+                
+                // Extract index expression
+                p = bracketPos + 1; // After '['
+                int indexLen = 0;
+                while (*p != '\0' && *p != ']' && indexLen < MAX_VALUE_LENGTH - 1) {
+                    indexExprs[*accessCount][indexLen++] = *p++;
+                }
+                indexExprs[*accessCount][indexLen] = '\0';
+                
+                if (*p == ']') {
+                    (*accessCount)++;
+                    p++; // Skip ']'
+                }
+            }
+        } else {
+            p = bracketPos + 1;
+        }
+    }
+}
+
+// Validate expression - check all variables exist and infer return type
+static bool validate_expression(const char* expr, VariableType expectedType, VariableType* actualType, char* errorMsg) {
+    if (!expr || expr[0] == '\0') {
+        strcpy(errorMsg, "Expression cannot be empty");
+        return false;
+    }
+    
+    // Extract all variables from expression
+    char varNames[MAX_VARIABLES][MAX_VAR_NAME_LENGTH];
+    int varCount = 0;
+    extract_variables_from_expression(expr, varNames, &varCount);
+    
+    // Check all variables are declared
+    for (int i = 0; i < varCount; i++) {
+        Variable* var = find_variable(varNames[i]);
+        if (!var) {
+            snprintf(errorMsg, MAX_VALUE_LENGTH, "Variable '%s' is not declared", varNames[i]);
+            return false;
+        }
+    }
+    
+    // Simple type inference: if expression contains only one variable, use its type
+    // If it's a literal, detect its type
+    // Otherwise, assume it's an arithmetic expression (int/real)
+    if (varCount == 0) {
+        // No variables - must be a literal
+        *actualType = detect_literal_type(expr);
+    } else if (varCount == 1) {
+        // Single variable - use its type
+        Variable* var = find_variable(varNames[0]);
+        *actualType = var->type;
+    } else {
+        // Multiple variables - check they're all same type and numeric
+        Variable* firstVar = find_variable(varNames[0]);
+        if (!firstVar) {
+            strcpy(errorMsg, "Internal error: variable not found");
+            return false;
+        }
+        
+        // All variables must be same type
+        for (int i = 1; i < varCount; i++) {
+            Variable* var = find_variable(varNames[i]);
+            if (!var || var->type != firstVar->type) {
+                strcpy(errorMsg, "All variables in expression must be the same type");
+                return false;
+            }
+        }
+        
+        // Must be numeric for arithmetic
+        if (firstVar->type != VAR_TYPE_INT && firstVar->type != VAR_TYPE_REAL) {
+            strcpy(errorMsg, "Arithmetic operations only work with numeric types (int/real)");
+            return false;
+        }
+        
+        *actualType = firstVar->type;
+    }
+    
+    // Check if actual type matches expected
+    if (*actualType != expectedType) {
+        strcpy(errorMsg, "Expression type doesn't match variable type");
+        return false;
+    }
+    
+    return true;
+}
+
+// Parse declare block value (format: "int a" or "real arr[]" or "int arr[10]")
+static bool parse_declare_block(const char* value, char* varName, VariableType* varType, bool* isArray, int* arraySize) {
+    if (!value || value[0] == '\0') return false;
+    
+    // Skip whitespace
+    const char* p = value;
+    while (*p == ' ' || *p == '\t') p++;
+    
+    // Determine type
+    if (strncmp(p, "int", 3) == 0 && (p[3] == ' ' || p[3] == '\t')) {
+        *varType = VAR_TYPE_INT;
+        p += 4;
+    } else if (strncmp(p, "real", 4) == 0 && (p[4] == ' ' || p[4] == '\t')) {
+        *varType = VAR_TYPE_REAL;
+        p += 5;
+    } else if (strncmp(p, "string", 6) == 0 && (p[6] == ' ' || p[6] == '\t')) {
+        *varType = VAR_TYPE_STRING;
+        p += 7;
+    } else if (strncmp(p, "bool", 4) == 0 && (p[4] == ' ' || p[4] == '\t')) {
+        *varType = VAR_TYPE_BOOL;
+        p += 5;
+    } else {
+        return false;
+    }
+    
+    // Skip whitespace
+    while (*p == ' ' || *p == '\t') p++;
+    
+    // Extract variable name
+    int nameLen = 0;
+    while (*p != '\0' && *p != ' ' && *p != '\t' && *p != '[' && nameLen < MAX_VAR_NAME_LENGTH - 1) {
+        varName[nameLen++] = *p++;
+    }
+    varName[nameLen] = '\0';
+    
+    if (nameLen == 0) return false;
+    
+    // Check for array indicator
+    *isArray = false;
+    *arraySize = 0;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '[') {
+        *isArray = true;
+        p++; // Skip '['
+        // Try to parse array size
+        if (*p >= '0' && *p <= '9') {
+            *arraySize = atoi(p);
+        }
+    }
+    
+    return true;
+}
+
+// Parse assignment (format: "a = 5" or "a = b")
+static bool parse_assignment(const char* value, char* leftVar, char* rightValue, bool* isRightVar) {
+    if (!value || value[0] == '\0') return false;
+    
+    // Skip ":=" prefix if present
+    const char* p = value;
+    while (*p == ' ' || *p == '\t' || *p == ':') p++;
+    if (*p == '=') p++;
+    while (*p == ' ' || *p == '\t') p++;
+    
+    // Extract left side - could be variable or array access
+    int leftLen = 0;
+    bool inArrayIndex = false;
+    while (*p != '\0' && *p != '=' && leftLen < MAX_VAR_NAME_LENGTH - 1) {
+        if (*p == '[') {
+            inArrayIndex = true;
+            // Include '[' in leftVar for array access
+            leftVar[leftLen++] = *p++;
+            // Skip index expression
+            while (*p != '\0' && *p != ']' && leftLen < MAX_VAR_NAME_LENGTH - 1) {
+                leftVar[leftLen++] = *p++;
+            }
+            if (*p == ']') {
+                leftVar[leftLen++] = *p++;
+                inArrayIndex = false;
+            }
+        } else if (*p == ' ' || *p == '\t') {
+            if (!inArrayIndex) break; // Stop at whitespace if not in array index
+            leftVar[leftLen++] = *p++;
+        } else {
+            leftVar[leftLen++] = *p++;
+        }
+    }
+    leftVar[leftLen] = '\0';
+    
+    if (leftLen == 0) return false;
+    
+    // Skip to '='
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p != '=') return false;
+    p++;
+    while (*p == ' ' || *p == '\t') p++;
+    
+    // Extract right side
+    int rightLen = 0;
+    bool inQuotes = false;
+    while (*p != '\0' && rightLen < MAX_VALUE_LENGTH - 1) {
+        if (*p == '"' && (rightLen == 0 || rightValue[rightLen - 1] != '\\')) {
+            inQuotes = !inQuotes;
+            p++;
+            continue;
+        }
+        if (!inQuotes && (*p == '\n' || *p == '\r')) break;
+        rightValue[rightLen++] = *p++;
+    }
+    rightValue[rightLen] = '\0';
+    
+    // Determine if right side is a variable (starts with letter/underscore, no quotes)
+    *isRightVar = false;
+    if (rightLen > 0 && !inQuotes) {
+        char first = rightValue[0];
+        if ((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || first == '_') {
+            // Check if it's all alphanumeric/underscore (variable name)
+            bool isVar = true;
+            for (int i = 0; i < rightLen; i++) {
+                char c = rightValue[i];
+                if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || 
+                      (c >= '0' && c <= '9') || c == '_')) {
+                    isVar = false;
+                    break;
+                }
+            }
+            *isRightVar = isVar;
+        }
+    }
+    
+    return true;
+}
+
+// Determine type of a literal value
+static VariableType detect_literal_type(const char* value) {
+    if (!value || value[0] == '\0') return VAR_TYPE_INT; // Default
+    
+    // String literal (quoted)
+    if (value[0] == '"' && value[strlen(value) - 1] == '"') {
+        return VAR_TYPE_STRING;
+    }
+    
+    // Boolean literal
+    if (strcmp(value, "true") == 0 || strcmp(value, "false") == 0) {
+        return VAR_TYPE_BOOL;
+    }
+    
+    // Check for real number (contains decimal point)
+    bool hasDecimal = false;
+    for (int i = 0; value[i] != '\0'; i++) {
+        if (value[i] == '.') {
+            hasDecimal = true;
+            break;
+        }
+    }
+    if (hasDecimal) {
+        return VAR_TYPE_REAL;
+    }
+    
+    // Integer (default)
+    return VAR_TYPE_INT;
+}
+
+// Validate assignment block
+static bool validate_assignment(const char* value) {
+    char leftVar[MAX_VAR_NAME_LENGTH];
+    char rightValue[MAX_VALUE_LENGTH];
+    bool isRightVar = false;
+    
+    if (!parse_assignment(value, leftVar, rightValue, &isRightVar)) {
+        return false;
+    }
+    
+    // Extract array name from left side (could be "arr" or "arr[index]")
+    char leftArrayName[MAX_VAR_NAME_LENGTH];
+    char leftIndexExpr[MAX_VALUE_LENGTH];
+    bool isLeftArray = parse_array_access(leftVar, leftArrayName, leftIndexExpr);
+    
+    const char* leftVarName = isLeftArray ? leftArrayName : leftVar;
+    
+    // Check if left variable exists
+    Variable* leftVarInfo = find_variable(leftVarName);
+    if (!leftVarInfo) {
+        tinyfd_messageBox("Validation Error", "Variable not declared", "ok", "error", 1);
+        return false;
+    }
+    
+    // If left side is array access, validate it
+    if (isLeftArray) {
+        if (!leftVarInfo->is_array) {
+            tinyfd_messageBox("Validation Error", "Left side is array access but variable is not an array", "ok", "error", 1);
+            return false;
+        }
+        char errorMsg[MAX_VALUE_LENGTH];
+        if (!check_array_bounds(leftArrayName, leftIndexExpr, errorMsg)) {
+            tinyfd_messageBox("Validation Error", errorMsg, "ok", "error", 1);
+            return false;
+        }
+    } else {
+        if (leftVarInfo->is_array) {
+            tinyfd_messageBox("Validation Error", "Variable is an array, use array[index] syntax", "ok", "error", 1);
+            return false;
+        }
+    }
+    
+    // Check right side - could be variable, array access, or literal
+    char rightArrayName[MAX_VAR_NAME_LENGTH];
+    char rightIndexExpr[MAX_VALUE_LENGTH];
+    bool isRightArray = parse_array_access(rightValue, rightArrayName, rightIndexExpr);
+    
+    if (isRightArray) {
+        // Right side is array access
+        Variable* rightVarInfo = find_variable(rightArrayName);
+        if (!rightVarInfo) {
+            tinyfd_messageBox("Validation Error", "Source array not declared", "ok", "error", 1);
+            return false;
+        }
+        if (!rightVarInfo->is_array) {
+            tinyfd_messageBox("Validation Error", "Right side is array access but variable is not an array", "ok", "error", 1);
+            return false;
+        }
+        if (rightVarInfo->type != leftVarInfo->type) {
+            tinyfd_messageBox("Validation Error", "Type mismatch: array types must match", "ok", "error", 1);
+            return false;
+        }
+        // Check bounds for right side array access
+        char errorMsg[MAX_VALUE_LENGTH];
+        if (!check_array_bounds(rightArrayName, rightIndexExpr, errorMsg)) {
+            tinyfd_messageBox("Validation Error", errorMsg, "ok", "error", 1);
+            return false;
+        }
+    } else if (isRightVar) {
+        // Right side is a simple variable - check it exists and types match
+        Variable* rightVarInfo = find_variable(rightValue);
+        if (!rightVarInfo) {
+            tinyfd_messageBox("Validation Error", "Source variable not declared", "ok", "error", 1);
+            return false;
+        }
+        if (rightVarInfo->type != leftVarInfo->type) {
+            tinyfd_messageBox("Validation Error", "Type mismatch: variables must be same type", "ok", "error", 1);
+            return false;
+        }
+        if (rightVarInfo->is_array) {
+            tinyfd_messageBox("Validation Error", "Right side variable is an array, use array[index] syntax", "ok", "error", 1);
+            return false;
+        }
+    } else {
+        // Right side is a literal - check type matches
+        VariableType literalType = detect_literal_type(rightValue);
+        if (literalType != leftVarInfo->type) {
+            tinyfd_messageBox("Validation Error", "Type mismatch: literal type doesn't match variable type", "ok", "error", 1);
+            return false;
+        }
+    }
+    
+    return true;
+}
+
+// Rebuild variable table from declare blocks
+void rebuild_variable_table(void) {
+    variableCount = 0;
+    
+    for (int i = 0; i < nodeCount; i++) {
+        if (nodes[i].type == NODE_DECLARE) {
+            char varName[MAX_VAR_NAME_LENGTH];
+            VariableType varType;
+            bool isArray;
+            int arraySize;
+            
+            if (parse_declare_block(nodes[i].value, varName, &varType, &isArray, &arraySize)) {
+                if (variableCount < MAX_VARIABLES) {
+                    strncpy(variables[variableCount].name, varName, MAX_VAR_NAME_LENGTH - 1);
+                    variables[variableCount].name[MAX_VAR_NAME_LENGTH - 1] = '\0';
+                    variables[variableCount].type = varType;
+                    variables[variableCount].is_array = isArray;
+                    variables[variableCount].array_size = arraySize;
+                    variableCount++;
+                }
+            }
+        }
+    }
+}
+
+// Edit node value using text input dialog
+void edit_node_value(int nodeIndex) {
+    if (nodeIndex < 0 || nodeIndex >= nodeCount) {
+        return;
+    }
+    
+    FlowNode *node = &nodes[nodeIndex];
+    
+    if (node->type == NODE_DECLARE) {
+        // DECLARE BLOCK: Step 1 - Select type
+        int typeChoice = tinyfd_messageBox("Select Variable Type", 
+            "Choose the type:\n1 = int\n2 = real\n3 = string\n4 = bool\n\nEnter 1-4:", 
+            "okcancel", "question", 1);
+        
+        if (typeChoice == 0) return; // User cancelled
+        
+        const char* typePrompt = "Enter type number (1=int, 2=real, 3=string, 4=bool):";
+        const char* typeInput = tinyfd_inputBox("Variable Type", typePrompt, "1");
+        
+        if (!typeInput || typeInput[0] == '\0') return;
+        
+        int typeNum = atoi(typeInput);
+        if (typeNum < 1 || typeNum > 4) {
+            tinyfd_messageBox("Validation Error", "Invalid type number. Must be 1-4.", "ok", "error", 1);
+            return;
+        }
+        
+        VariableType selectedType = (VariableType)(typeNum - 1);
+        const char* typeOptions[] = {"int", "real", "string", "bool"};
+        const char* typeName = typeOptions[selectedType];
+        
+        // Step 2 - Get variable name
+        char currentName[MAX_VAR_NAME_LENGTH] = "";
+        int currentArraySize = 0;
+        // Try to extract current name if block already has a value
+        if (node->value[0] != '\0') {
+            char varName[MAX_VAR_NAME_LENGTH];
+            VariableType varType;
+            bool isArray;
+            int arraySize;
+            if (parse_declare_block(node->value, varName, &varType, &isArray, &arraySize)) {
+                strncpy(currentName, varName, MAX_VAR_NAME_LENGTH - 1);
+                currentArraySize = arraySize;
+            }
+        }
+        
+        const char* nameResult = tinyfd_inputBox(
+            "Variable Name",
+            "Enter variable name:",
+            currentName
+        );
+        
+        if (!nameResult || nameResult[0] == '\0') return;
+        
+        // Copy nameResult to local buffer immediately (tinyfd might reuse its buffer)
+        char varName[MAX_VAR_NAME_LENGTH];
+        strncpy(varName, nameResult, MAX_VAR_NAME_LENGTH - 1);
+        varName[MAX_VAR_NAME_LENGTH - 1] = '\0';
+        
+        // Step 3 - Validate variable name
+        if (!is_valid_variable_name(varName)) {
+            tinyfd_messageBox("Validation Error", 
+                "Invalid variable name. Must start with letter or underscore, followed by letters, numbers, or underscores.",
+                "ok", "error", 1);
+            return;
+        }
+        
+        // Step 4 - Check for duplicate
+        if (variable_name_exists(varName, nodeIndex)) {
+            tinyfd_messageBox("Validation Error", 
+                "Variable name already exists. Please choose a different name.",
+                "ok", "error", 1);
+            return;
+        }
+        
+        // Step 5 - Ask for array
+        int isArrayChoice = tinyfd_messageBox("Array Variable?", 
+            "Is this an array variable?", "yesno", "question", 0);
+        bool isArray = (isArrayChoice == 1); // 1 = yes, 0 = no
+        
+        int arraySize = 0;
+        if (isArray) {
+            // Step 5a - Get array size
+            char sizeStr[32];
+            if (currentArraySize > 0) {
+                snprintf(sizeStr, sizeof(sizeStr), "%d", currentArraySize);
+            } else {
+                sizeStr[0] = '\0';
+            }
+            
+            const char* sizeInput = tinyfd_inputBox(
+                "Array Size",
+                "Enter array size (number of elements):",
+                sizeStr
+            );
+            
+            if (!sizeInput || sizeInput[0] == '\0') return;
+            
+            arraySize = atoi(sizeInput);
+            if (arraySize <= 0) {
+                tinyfd_messageBox("Validation Error", 
+                    "Array size must be a positive integer.",
+                    "ok", "error", 1);
+                return;
+            }
+        }
+        
+        // Step 6 - Build and save value string
+        char newValue[MAX_VALUE_LENGTH];
+        if (isArray) {
+            if (arraySize > 0) {
+                snprintf(newValue, sizeof(newValue), "%s %s[%d]", typeName, varName, arraySize);
+            } else {
+                snprintf(newValue, sizeof(newValue), "%s %s[]", typeName, varName);
+            }
+        } else {
+            snprintf(newValue, sizeof(newValue), "%s %s", typeName, varName);
+        }
+        
+        strncpy(node->value, newValue, MAX_VALUE_LENGTH - 1);
+        node->value[MAX_VALUE_LENGTH - 1] = '\0';
+        
+        // Rebuild variable table
+        rebuild_variable_table();
+        
+    } else if (node->type == NODE_ASSIGNMENT) {
+        // ASSIGNMENT BLOCK: Step 1 - Select variable
+        if (variableCount == 0) {
+            tinyfd_messageBox("No Variables", 
+                "No variables declared yet. Please declare a variable first.",
+                "ok", "warning", 1);
+            return;
+        }
+        
+        // Build list of variable names for display
+        char varList[MAX_VALUE_LENGTH * 2] = "Available variables:\n";
+        for (int i = 0; i < variableCount; i++) {
+            const char* typeStr = "";
+            switch (variables[i].type) {
+                case VAR_TYPE_INT: typeStr = "int"; break;
+                case VAR_TYPE_REAL: typeStr = "real"; break;
+                case VAR_TYPE_STRING: typeStr = "string"; break;
+                case VAR_TYPE_BOOL: typeStr = "bool"; break;
+            }
+            char varEntry[MAX_VAR_NAME_LENGTH + 30];
+            if (variables[i].is_array) {
+                if (variables[i].array_size > 0) {
+                    snprintf(varEntry, sizeof(varEntry), "%d: %s %s[%d]\n", 
+                        i + 1, typeStr, variables[i].name, variables[i].array_size);
+                } else {
+                    snprintf(varEntry, sizeof(varEntry), "%d: %s %s[]\n", 
+                        i + 1, typeStr, variables[i].name);
+                }
+            } else {
+                snprintf(varEntry, sizeof(varEntry), "%d: %s %s\n", 
+                    i + 1, typeStr, variables[i].name);
+            }
+            strncat(varList, varEntry, sizeof(varList) - strlen(varList) - 1);
+        }
+        strncat(varList, "\nEnter variable number:", sizeof(varList) - strlen(varList) - 1);
+        
+        tinyfd_messageBox("Select Variable", varList, "ok", "info", 1);
+        
+        const char* varInput = tinyfd_inputBox("Select Variable", 
+            "Enter variable number (1 to list):", "1");
+        
+        if (!varInput || varInput[0] == '\0') return;
+        
+        int varChoice = atoi(varInput) - 1;
+        if (varChoice < 0 || varChoice >= variableCount) {
+            tinyfd_messageBox("Validation Error", "Invalid variable number.", "ok", "error", 1);
+            return;
+        }
+        
+        Variable* selectedVar = &variables[varChoice];
+        
+        // Step 2 - Get index if array
+        char indexExpr[MAX_VALUE_LENGTH] = "";
+        char leftSide[MAX_VALUE_LENGTH];
+        
+        if (selectedVar->is_array) {
+            // Extract current index if block already has a value
+            if (node->value[0] != '\0') {
+                char arrayName[MAX_VAR_NAME_LENGTH];
+                char currentIndex[MAX_VALUE_LENGTH];
+                if (parse_array_access(node->value, arrayName, currentIndex)) {
+                    if (strcmp(arrayName, selectedVar->name) == 0) {
+                        strncpy(indexExpr, currentIndex, MAX_VALUE_LENGTH - 1);
+                    }
+                }
+            }
+            
+            const char* indexInput = tinyfd_inputBox(
+                "Array Index",
+                "Enter index (integer literal or int variable, e.g., 0, i, i+1):",
+                indexExpr
+            );
+            
+            if (!indexInput || indexInput[0] == '\0') return;
+            
+            // Validate index expression
+            char errorMsg[MAX_VALUE_LENGTH];
+            int dummyIndex;
+            if (!evaluate_index_expression(indexInput, &dummyIndex, errorMsg)) {
+                tinyfd_messageBox("Validation Error", errorMsg, "ok", "error", 1);
+                return;
+            }
+            
+            // Check array bounds
+            if (!check_array_bounds(selectedVar->name, indexInput, errorMsg)) {
+                tinyfd_messageBox("Validation Error", errorMsg, "ok", "error", 1);
+                return;
+            }
+            
+            strncpy(indexExpr, indexInput, MAX_VALUE_LENGTH - 1);
+            indexExpr[MAX_VALUE_LENGTH - 1] = '\0';
+            
+            // Build left side: arr[index]
+            snprintf(leftSide, sizeof(leftSide), "%s[%s]", selectedVar->name, indexExpr);
+        } else {
+            // Not an array, just variable name
+            strncpy(leftSide, selectedVar->name, MAX_VALUE_LENGTH - 1);
+            leftSide[MAX_VALUE_LENGTH - 1] = '\0';
+        }
+        
+        // Step 3 - Get expression
+        char currentExpr[MAX_VALUE_LENGTH] = "";
+        // Try to extract current expression if block already has a value
+        if (node->value[0] != '\0') {
+            char leftVar[MAX_VAR_NAME_LENGTH];
+            char rightValue[MAX_VALUE_LENGTH];
+            bool isRightVar = false;
+            if (parse_assignment(node->value, leftVar, rightValue, &isRightVar)) {
+                strncpy(currentExpr, rightValue, MAX_VALUE_LENGTH - 1);
+            }
+        }
+        
+        const char* exprResult = tinyfd_inputBox(
+            "Assignment Expression",
+            "Enter expression (e.g., 5, b, a + 1, \"hello\", arr[i]):",
+            currentExpr
+        );
+        
+        if (!exprResult || exprResult[0] == '\0') return;
+        
+        // Step 4 - Validate expression and check array bounds in expression
+        VariableType actualType;
+        char errorMsg[MAX_VALUE_LENGTH];
+        
+        // Check for array accesses in the expression
+        char exprArrayNames[MAX_VARIABLES][MAX_VAR_NAME_LENGTH];
+        char exprIndexExprs[MAX_VARIABLES][MAX_VALUE_LENGTH];
+        int exprAccessCount = 0;
+        extract_array_accesses(exprResult, exprArrayNames, exprIndexExprs, &exprAccessCount);
+        
+        // Validate each array access in expression
+        for (int i = 0; i < exprAccessCount; i++) {
+            if (!check_array_bounds(exprArrayNames[i], exprIndexExprs[i], errorMsg)) {
+                tinyfd_messageBox("Validation Error", errorMsg, "ok", "error", 1);
+                return;
+            }
+        }
+        
+        if (!validate_expression(exprResult, selectedVar->type, &actualType, errorMsg)) {
+            tinyfd_messageBox("Validation Error", errorMsg, "ok", "error", 1);
+            return;
+        }
+        
+        // Step 5 - Save assignment
+        char newValue[MAX_VALUE_LENGTH];
+        snprintf(newValue, sizeof(newValue), "%s = %s", leftSide, exprResult);
+        
+        strncpy(node->value, newValue, MAX_VALUE_LENGTH - 1);
+        node->value[MAX_VALUE_LENGTH - 1] = '\0';
+        
+    } else {
+        // Other block types - use simple input dialog
+        const char* result = tinyfd_inputBox(
+            "Edit Block Value",
+            "Enter the value for this block:",
+            node->value
+        );
+        
+        if (result != NULL) {
+            strncpy(node->value, result, MAX_VALUE_LENGTH - 1);
+            node->value[MAX_VALUE_LENGTH - 1] = '\0';
+        }
+    }
 }
 
 void insert_node_in_connection(int connIndex, NodeType nodeType) {
@@ -541,9 +1777,7 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
     double originalToY = to->y;
     
     // Calculate grid positions
-    int fromGridX = world_to_grid_x(from->x);
     int fromGridY = world_to_grid_y(from->y);
-    int toGridY = world_to_grid_y(to->y);
     
     // Create new node positioned one grid cell below the "from" node
     int newGridY = fromGridY - 1;
@@ -552,7 +1786,7 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
     newNode->y = snap_to_grid_y(grid_to_world_y(newGridY));  // One grid cell below
     newNode->width = 0.35f;
     newNode->height = 0.22f;
-    newNode->value = nodeCount;
+    newNode->value[0] = '\0';  // Initialize value as empty string
     newNode->type = nodeType;
     int newNodeIndex = nodeCount;
     nodeCount++;
@@ -660,7 +1894,8 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
                             // Delete action
                             delete_node(popupMenu.nodeIndex);
                         } else if (nodeMenuItems[clickedItem].action == 1) {
-                            // Value action - do nothing for now
+                            // Value action - edit node value
+                            edit_node_value(popupMenu.nodeIndex);
                         }
                     }
                     popupMenu.active = false;
@@ -712,41 +1947,73 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
 void drawPopupMenu();  // Forward declaration
 
 void drawFlowNode(const FlowNode *n) {
-    // Node body color based on type
+    // Route to appropriate block drawing function based on type
     if (n->type == NODE_START) {
+        // Start node: green rounded rectangle
         glColor3f(0.3f, 0.9f, 0.3f); // green for start
+        
+        glBegin(GL_QUADS);
+        glVertex2f(n->x - n->width * 0.5f, n->y + n->height * 0.5f);
+        glVertex2f(n->x + n->width * 0.5f, n->y + n->height * 0.5f);
+        glVertex2f(n->x + n->width * 0.5f, n->y - n->height * 0.5f);
+        glVertex2f(n->x - n->width * 0.5f, n->y - n->height * 0.5f);
+        glEnd();
+        
+        // Border
+        glColor3f(0.2f, 0.2f, 0.0f);
+        glBegin(GL_LINE_LOOP);
+        glVertex2f(n->x - n->width * 0.5f, n->y + n->height * 0.5f);
+        glVertex2f(n->x + n->width * 0.5f, n->y + n->height * 0.5f);
+        glVertex2f(n->x + n->width * 0.5f, n->y - n->height * 0.5f);
+        glVertex2f(n->x - n->width * 0.5f, n->y - n->height * 0.5f);
+        glEnd();
+        
+        // Output connector (bottom) only
+        float r = 0.03f;
+        float cx = (float)n->x;
+        float cy = (float)(n->y - n->height * 0.5f);
+        glColor3f(0.1f, 0.1f, 0.1f);
+        glBegin(GL_TRIANGLE_FAN);
+        glVertex2f(cx, cy);
+        for (int i = 0; i <= 20; ++i) {
+            float a = (float)i / 20.0f * 6.2831853f;
+            glVertex2f(cx + cosf(a) * r, cy + sinf(a) * r);
+        }
+        glEnd();
+        
+        // Draw value text if present (starting a bit left of block center)
+        if (n->value[0] != '\0') {
+            float fontSize = n->height * 0.3f;
+            // Position text starting a bit left of block center
+            float textX = n->x - n->width * 0.3f;
+            float textY = n->y - fontSize * 0.25f;
+            draw_text(textX, textY, n->value, fontSize, 0.0f, 0.0f, 0.0f);
+        }
     } else if (n->type == NODE_END) {
+        // End node: red rounded rectangle
         glColor3f(0.9f, 0.3f, 0.3f); // red for end
-    } else {
-        glColor3f(0.95f, 0.9f, 0.25f); // yellow for normal
-    }
-    
-    glBegin(GL_QUADS);
-    glVertex2f(n->x - n->width * 0.5f, n->y + n->height * 0.5f);
-    glVertex2f(n->x + n->width * 0.5f, n->y + n->height * 0.5f);
-    glVertex2f(n->x + n->width * 0.5f, n->y - n->height * 0.5f);
-    glVertex2f(n->x - n->width * 0.5f, n->y - n->height * 0.5f);
-    glEnd();
-
-    // Border
-    glColor3f(0.2f, 0.2f, 0.0f);
-    glBegin(GL_LINE_LOOP);
-    glVertex2f(n->x - n->width * 0.5f, n->y + n->height * 0.5f);
-    glVertex2f(n->x + n->width * 0.5f, n->y + n->height * 0.5f);
-    glVertex2f(n->x + n->width * 0.5f, n->y - n->height * 0.5f);
-    glVertex2f(n->x - n->width * 0.5f, n->y - n->height * 0.5f);
-    glEnd();
-
-    float r = 0.03f;
-    float cx;
-    float cy;
-
-    glColor3f(0.1f, 0.1f, 0.1f);
-
-    // Input connector (top) — not drawn for start nodes
-    if (n->type != NODE_START) {
-        cx = (float)n->x;
-        cy = (float)(n->y + n->height * 0.5f);
+        
+        glBegin(GL_QUADS);
+        glVertex2f(n->x - n->width * 0.5f, n->y + n->height * 0.5f);
+        glVertex2f(n->x + n->width * 0.5f, n->y + n->height * 0.5f);
+        glVertex2f(n->x + n->width * 0.5f, n->y - n->height * 0.5f);
+        glVertex2f(n->x - n->width * 0.5f, n->y - n->height * 0.5f);
+        glEnd();
+        
+        // Border
+        glColor3f(0.2f, 0.2f, 0.0f);
+        glBegin(GL_LINE_LOOP);
+        glVertex2f(n->x - n->width * 0.5f, n->y + n->height * 0.5f);
+        glVertex2f(n->x + n->width * 0.5f, n->y + n->height * 0.5f);
+        glVertex2f(n->x + n->width * 0.5f, n->y - n->height * 0.5f);
+        glVertex2f(n->x - n->width * 0.5f, n->y - n->height * 0.5f);
+        glEnd();
+        
+        // Input connector (top) only
+        float r = 0.03f;
+        float cx = (float)n->x;
+        float cy = (float)(n->y + n->height * 0.5f);
+        glColor3f(0.1f, 0.1f, 0.1f);
         glBegin(GL_TRIANGLE_FAN);
         glVertex2f(cx, cy);
         for (int i = 0; i <= 20; ++i) {
@@ -754,19 +2021,26 @@ void drawFlowNode(const FlowNode *n) {
             glVertex2f(cx + cosf(a) * r, cy + sinf(a) * r);
         }
         glEnd();
-    }
-
-    // Output connector (bottom) — not drawn for end nodes
-    if (n->type != NODE_END) {
-        cx = (float)n->x;
-        cy = (float)(n->y - n->height * 0.5f);
-        glBegin(GL_TRIANGLE_FAN);
-        glVertex2f(cx, cy);
-        for (int i = 0; i <= 20; ++i) {
-            float a = (float)i / 20.0f * 6.2831853f;
-            glVertex2f(cx + cosf(a) * r, cy + sinf(a) * r);
+        
+        // Draw value text if present (starting a bit left of block center)
+        if (n->value[0] != '\0') {
+            float fontSize = n->height * 0.3f;
+            // Position text starting a bit left of block center
+            float textX = n->x - n->width * 0.3f;
+            float textY = n->y - fontSize * 0.25f;
+            draw_text(textX, textY, n->value, fontSize, 0.0f, 0.0f, 0.0f);
         }
-        glEnd();
+    } else if (n->type == NODE_PROCESS || n->type == NODE_NORMAL) {
+        // Process block (NODE_NORMAL maps to PROCESS for backward compatibility)
+        draw_block_process(n);
+    } else if (n->type == NODE_INPUT) {
+        draw_block_input(n);
+    } else if (n->type == NODE_OUTPUT) {
+        draw_block_output(n);
+    } else if (n->type == NODE_ASSIGNMENT) {
+        draw_block_assignment(n);
+    } else if (n->type == NODE_DECLARE) {
+        draw_block_declare(n);
     }
 }
 
@@ -774,6 +2048,10 @@ void drawFlowchart(void) {
     // Apply scroll transformation (both horizontal and vertical)
     glPushMatrix();
     glTranslatef((float)scrollOffsetX, (float)scrollOffsetY, 0.0f);
+    
+    // Set scroll offsets in text renderer so block labels move with blocks
+    // (only while drawing blocks, not menus/buttons)
+    text_renderer_set_scroll_offsets(scrollOffsetX, scrollOffsetY);
     
     // Draw connections as right-angle L-shapes
     glLineWidth(3.0f);
@@ -823,12 +2101,15 @@ void drawFlowchart(void) {
     }
     glLineWidth(1.0f);
 
-    // Draw nodes
+    // Draw nodes (block labels will use scroll offsets set above)
     for (int i = 0; i < nodeCount; ++i) {
         drawFlowNode(&nodes[i]);
     }
     
     glPopMatrix();
+    
+    // Reset scroll offsets to 0 for screen-space elements (menus, buttons)
+    text_renderer_set_scroll_offsets(0.0, 0.0);
     
     // Draw popup menu in screen space (not affected by scroll)
     drawPopupMenu();
@@ -1054,7 +2335,7 @@ void initialize_flowchart() {
     nodes[0].y = grid_to_world_y(0);
     nodes[0].width = 0.35f;
     nodes[0].height = 0.22f;
-    nodes[0].value = 0;
+    nodes[0].value[0] = '\0';  // Initialize value as empty string
     nodes[0].type = NODE_START;
     
     // Create END node at grid position (0, -1)
@@ -1062,7 +2343,7 @@ void initialize_flowchart() {
     nodes[1].y = grid_to_world_y(-1);
     nodes[1].width = 0.35f;
     nodes[1].height = 0.22f;
-    nodes[1].value = 1;
+    nodes[1].value[0] = '\0';  // Initialize value as empty string
     nodes[1].type = NODE_END;
     
     nodeCount = 2;
@@ -1115,6 +2396,9 @@ int main(void) {
         hoveredConnection = hit_connection(worldCursorX, worldCursorY, 0.05f);
         
         drawFlowchart();
+        
+        // Ensure scroll offsets are 0 for buttons (already reset in drawFlowchart, but be safe)
+        text_renderer_set_scroll_offsets(0.0, 0.0);
         
         // Draw buttons in screen space (not affected by scroll)
         drawButtons(window);

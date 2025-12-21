@@ -20,6 +20,9 @@ float get_text_width(const char* text, float fontSize);
 // Set window dimensions (call when window is created or resized)
 void text_renderer_set_window_size(int width, int height);
 
+// Set scroll offsets (call before drawing text that should scroll with content)
+void text_renderer_set_scroll_offsets(double offsetX, double offsetY);
+
 #endif // TEXT_RENDERER_H
 
 

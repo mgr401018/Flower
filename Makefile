@@ -18,7 +18,12 @@ TARGET = triangle
 # Source files
 SRCS = main.c \
        $(IMPORTS_DIR)/tinyfiledialogs.c \
-       $(SRC_DIR)/text_renderer.c
+       $(SRC_DIR)/text_renderer.c \
+       $(SRC_DIR)/block_process.c \
+       $(SRC_DIR)/block_input.c \
+       $(SRC_DIR)/block_output.c \
+       $(SRC_DIR)/block_assignment.c \
+       $(SRC_DIR)/block_declare.c
 
 # Object files (in build directory)
 OBJS = $(SRCS:%.c=$(BUILD_DIR)/%.o)

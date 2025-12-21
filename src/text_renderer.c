@@ -18,11 +18,19 @@ static GLuint font_texture = 0;
 static int window_width = 800;
 static int window_height = 600;
 static int font_initialized = 0;
+static double scroll_offset_x = 0.0;
+static double scroll_offset_y = 0.0;
 
 // Set window dimensions (call when window is created or resized)
 void text_renderer_set_window_size(int width, int height) {
     window_width = width;
     window_height = height;
+}
+
+// Set scroll offsets (call before drawing text that should scroll with content)
+void text_renderer_set_scroll_offsets(double offsetX, double offsetY) {
+    scroll_offset_x = offsetX;
+    scroll_offset_y = offsetY;
 }
 
 int init_text_renderer(const char* fontPath) {
@@ -148,8 +156,11 @@ float draw_text(float x, float y, const char* text, float fontSize, float r, flo
     glLoadIdentity();
     
     // Convert normalized coordinates to pixel coordinates
-    float pixel_x = ((x + 1.0f) / 2.0f) * window_width;
-    float pixel_y = ((1.0f - y) / 2.0f) * window_height;
+    // Apply scroll offsets to move text with blocks
+    float world_x = (float)(x + scroll_offset_x);
+    float world_y = (float)(y + scroll_offset_y);
+    float pixel_x = ((world_x + 1.0f) / 2.0f) * window_width;
+    float pixel_y = ((1.0f - world_y) / 2.0f) * window_height;
     
     float scale = fontSizePixels / 32.0f;  // 32.0 is the baked font size
     float start_x = pixel_x;
