@@ -13,6 +13,7 @@
 #include "src/block_output.h"
 #include "src/block_assignment.h"
 #include "src/block_declare.h"
+#include "src/code_exporter.h"
 
 // Global variables for cursor position
 double cursorX = 0.0;
@@ -36,6 +37,8 @@ const float buttonRadius = 0.04f;
 const float buttonX = -0.95f;  // Fixed X position for both buttons
 const float saveButtonY = 0.9f;   // Blue save button
 const float loadButtonY = 0.8f;   // Yellow load button
+const float closeButtonY = 0.7f;  // Red close button
+const float exportButtonY = 0.6f; // Green export button
 
 // Flowchart node and connection data
 #define MAX_NODES 100
@@ -2202,6 +2205,50 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
             }
             return;
         }
+        if (cursor_over_button(buttonX_scaled, closeButtonY, window)) {
+            // Red close button clicked - close program
+            glfwSetWindowShouldClose(window, GLFW_TRUE);
+            return;
+        }
+        if (cursor_over_button(buttonX_scaled, exportButtonY, window)) {
+            // Export button clicked - show language selection and export
+            int langChoice = tinyfd_messageBox("Select Programming Language", 
+                "Choose the language:\n1 = C\n\nEnter 1:", 
+                "okcancel", "question", 1);
+            
+            if (langChoice == 0) return; // User cancelled
+            
+            const char* langPrompt = "Enter language number (1=C):";
+            const char* langInput = tinyfd_inputBox("Programming Language", langPrompt, "1");
+            
+            if (!langInput || langInput[0] == '\0') return;
+            
+            int langNum = atoi(langInput);
+            if (langNum != 1) {
+                tinyfd_messageBox("Validation Error", "Invalid language number. Only C (1) is supported.", "ok", "error", 1);
+                return;
+            }
+            
+            const char* langName = "C";
+            
+            // Open file save dialog
+            const char* filters[] = {"*.c"};
+            const char* filename = tinyfd_saveFileDialog(
+                "Export Flowchart to Code",
+                "output.c",
+                1, filters,
+                "C Source Files (*.c)"
+            );
+            
+            if (filename != NULL && strlen(filename) > 0) {
+                if (export_to_code(filename, langName, nodes, nodeCount, connections, connectionCount)) {
+                    tinyfd_messageBox("Export Success", "Flowchart exported successfully!", "ok", "info", 1);
+                } else {
+                    tinyfd_messageBox("Export Error", "Failed to export flowchart. Check console for details.", "ok", "error", 1);
+                }
+            }
+            return;
+        }
         
         // Check popup menu interaction
         if (popupMenu.active) {
@@ -2606,6 +2653,8 @@ void drawButtons(GLFWwindow* window) {
     
     bool hoveringSave = cursor_over_button(buttonX_scaled, saveButtonY, window);
     bool hoveringLoad = cursor_over_button(buttonX_scaled, loadButtonY, window);
+    bool hoveringClose = cursor_over_button(buttonX_scaled, closeButtonY, window);
+    bool hoveringExport = cursor_over_button(buttonX_scaled, exportButtonY, window);
     
     // Draw save button (blue) - use same radius for X and Y to make it circular
     glColor3f(0.2f, 0.4f, 0.9f);
@@ -2654,7 +2703,7 @@ void drawButtons(GLFWwindow* window) {
             // Draw label background
             float labelX = buttonX_scaled + buttonRadius + 0.05f;
             float labelY = saveButtonY;
-            float labelWidth = 0.15f;
+            float labelWidth = 0.18f;
             float labelHeight = 0.06f;
         
         glColor3f(0.1f, 0.1f, 0.15f);
@@ -2688,7 +2737,7 @@ void drawButtons(GLFWwindow* window) {
         // Draw label background
         float labelX = buttonX_scaled + buttonRadius + 0.05f;
         float labelY = loadButtonY;
-        float labelWidth = 0.15f;
+        float labelWidth = 0.18f;
         float labelHeight = 0.06f;
         
         glColor3f(0.1f, 0.1f, 0.15f);
@@ -2716,6 +2765,114 @@ void drawButtons(GLFWwindow* window) {
         float textY = labelY - fontSize * 0.25f;
         // Center vertically
         draw_text(textX, textY, "LOAD", fontSize, 1.0f, 1.0f, 1.0f);
+    }
+    
+    // Draw close button (red) - use same radius for X and Y to make it circular
+    glColor3f(0.9f, 0.2f, 0.2f);
+    glBegin(GL_TRIANGLE_FAN);
+    glVertex2f(buttonX_scaled, closeButtonY);
+    for (int i = 0; i <= 20; ++i) {
+        float angle = (float)i / 20.0f * 6.2831853f;
+        glVertex2f(buttonX_scaled + cosf(angle) * buttonRadius, 
+                   closeButtonY + sinf(angle) * buttonRadius);
+    }
+    glEnd();
+    
+    // Draw close button border
+    glColor3f(0.5f, 0.1f, 0.1f);
+    glBegin(GL_LINE_LOOP);
+    for (int i = 0; i <= 20; ++i) {
+        float angle = (float)i / 20.0f * 6.2831853f;
+        glVertex2f(buttonX_scaled + cosf(angle) * buttonRadius, 
+                   closeButtonY + sinf(angle) * buttonRadius);
+    }
+    glEnd();
+    
+    // Draw export button (green) - use same radius for X and Y to make it circular
+    glColor3f(0.3f, 0.8f, 0.3f);
+    glBegin(GL_TRIANGLE_FAN);
+    glVertex2f(buttonX_scaled, exportButtonY);
+    for (int i = 0; i <= 20; ++i) {
+        float angle = (float)i / 20.0f * 6.2831853f;
+        glVertex2f(buttonX_scaled + cosf(angle) * buttonRadius, 
+                   exportButtonY + sinf(angle) * buttonRadius);
+    }
+    glEnd();
+    
+    // Draw export button border
+    glColor3f(0.15f, 0.5f, 0.15f);
+    glBegin(GL_LINE_LOOP);
+    for (int i = 0; i <= 20; ++i) {
+        float angle = (float)i / 20.0f * 6.2831853f;
+        glVertex2f(buttonX_scaled + cosf(angle) * buttonRadius, 
+                   exportButtonY + sinf(angle) * buttonRadius);
+    }
+    glEnd();
+    
+    // Draw hover labels for close button
+    if (hoveringClose) {
+        // Draw label background
+        float labelX = buttonX_scaled + buttonRadius + 0.05f;
+        float labelY = closeButtonY;
+        float labelWidth = 0.18f;
+        float labelHeight = 0.06f;
+        
+        glColor3f(0.1f, 0.1f, 0.15f);
+        glBegin(GL_QUADS);
+        glVertex2f(labelX, labelY + labelHeight * 0.5f);
+        glVertex2f(labelX + labelWidth, labelY + labelHeight * 0.5f);
+        glVertex2f(labelX + labelWidth, labelY - labelHeight * 0.5f);
+        glVertex2f(labelX, labelY - labelHeight * 0.5f);
+        glEnd();
+        
+        // Draw label border
+        glColor3f(0.7f, 0.7f, 0.7f);
+        glBegin(GL_LINE_LOOP);
+        glVertex2f(labelX, labelY + labelHeight * 0.5f);
+        glVertex2f(labelX + labelWidth, labelY + labelHeight * 0.5f);
+        glVertex2f(labelX + labelWidth, labelY - labelHeight * 0.5f);
+        glVertex2f(labelX, labelY - labelHeight * 0.5f);
+        glEnd();
+        
+        // Draw "CLOSE" text
+        float fontSize = labelHeight * 0.65f;
+        float textWidth = get_text_width("CLOSE", fontSize);
+        float textX = labelX + (labelWidth - textWidth) * 0.25f;
+        float textY = labelY - fontSize * 0.25f;
+        draw_text(textX, textY, "CLOSE", fontSize, 1.0f, 1.0f, 1.0f);
+    }
+    
+    // Draw hover labels for export button
+    if (hoveringExport) {
+        // Draw label background
+        float labelX = buttonX_scaled + buttonRadius + 0.05f;
+        float labelY = exportButtonY;
+        float labelWidth = 0.2f;
+        float labelHeight = 0.06f;
+        
+        glColor3f(0.1f, 0.1f, 0.15f);
+        glBegin(GL_QUADS);
+        glVertex2f(labelX, labelY + labelHeight * 0.5f);
+        glVertex2f(labelX + labelWidth, labelY + labelHeight * 0.5f);
+        glVertex2f(labelX + labelWidth, labelY - labelHeight * 0.5f);
+        glVertex2f(labelX, labelY - labelHeight * 0.5f);
+        glEnd();
+        
+        // Draw label border
+        glColor3f(0.7f, 0.7f, 0.7f);
+        glBegin(GL_LINE_LOOP);
+        glVertex2f(labelX, labelY + labelHeight * 0.5f);
+        glVertex2f(labelX + labelWidth, labelY + labelHeight * 0.5f);
+        glVertex2f(labelX + labelWidth, labelY - labelHeight * 0.5f);
+        glVertex2f(labelX, labelY - labelHeight * 0.5f);
+        glEnd();
+        
+        // Draw "EXPORT" text
+        float fontSize = labelHeight * 0.65f;
+        float textWidth = get_text_width("EXPORT", fontSize);
+        float textX = labelX + (labelWidth - textWidth) * 0.25f;
+        float textY = labelY - fontSize * 0.25f;
+        draw_text(textX, textY, "EXPORT", fontSize, 1.0f, 1.0f, 1.0f);
     }
 }
 
