@@ -651,6 +651,10 @@ static bool check_array_bounds(const char* arrayName, const char* indexExpr, cha
 static void extract_array_accesses(const char* expr, char arrayNames[][MAX_VAR_NAME_LENGTH], 
                                    char indexExprs[][MAX_VALUE_LENGTH], int* accessCount);
 static void extract_variables_from_expression_simple(const char* expr, char varNames[][MAX_VAR_NAME_LENGTH], int* varCount);
+static void extract_output_placeholders(const char* formatStr, char varNames[][MAX_VAR_NAME_LENGTH], int* varCount);
+static void extract_output_placeholders_with_arrays(const char* formatStr, char varNames[][MAX_VAR_NAME_LENGTH], 
+                                                    char indexExprs[][MAX_VALUE_LENGTH], bool* isArrayAccess, int* varCount);
+static bool parse_input_block(const char* value, char* varName, char* indexExpr, bool* isArray);
 
 // Find variable by name
 static Variable* find_variable(const char* name) {
@@ -1362,6 +1366,173 @@ static VariableType detect_literal_type(const char* value) {
     return VAR_TYPE_INT;
 }
 
+// Extract variable placeholders from output format string (pattern: {varName} or {arr[index]})
+static void extract_output_placeholders(const char* formatStr, char varNames[][MAX_VAR_NAME_LENGTH], int* varCount) {
+    *varCount = 0;
+    if (!formatStr || formatStr[0] == '\0') return;
+    
+    const char* p = formatStr;
+    while (*p != '\0' && *varCount < MAX_VARIABLES) {
+        // Look for '{'
+        while (*p != '\0' && *p != '{') p++;
+        if (*p == '\0') break;
+        
+        p++; // Skip '{'
+        
+        // Extract variable name until '}' or '['
+        int nameLen = 0;
+        bool isArrayAccess = false;
+        while (*p != '\0' && *p != '}' && *p != '[' && nameLen < MAX_VAR_NAME_LENGTH - 1) {
+            char c = *p;
+            // Valid variable name characters
+            if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || 
+                (c >= '0' && c <= '9') || c == '_') {
+                varNames[*varCount][nameLen++] = c;
+                p++;
+            } else {
+                // Invalid character in placeholder, skip this placeholder
+                break;
+            }
+        }
+        
+        // Check if it's an array access
+        if (*p == '[' && nameLen > 0) {
+            isArrayAccess = true;
+            p++; // Skip '['
+            // Skip index expression until ']'
+            while (*p != '\0' && *p != ']') p++;
+            if (*p == ']') {
+                p++; // Skip ']'
+            } else {
+                // Missing closing bracket, invalid placeholder
+                while (*p != '\0' && *p != '{') p++;
+                continue;
+            }
+        }
+        
+        if (*p == '}' && nameLen > 0) {
+            varNames[*varCount][nameLen] = '\0';
+            (*varCount)++;
+            p++; // Skip '}'
+        } else {
+            // Invalid placeholder, skip to next '{' or end
+            while (*p != '\0' && *p != '{') p++;
+        }
+    }
+}
+
+// Extract variable placeholders from output format string with array access info (pattern: {varName} or {arr[index]})
+static void extract_output_placeholders_with_arrays(const char* formatStr, char varNames[][MAX_VAR_NAME_LENGTH], 
+                                                    char indexExprs[][MAX_VALUE_LENGTH], bool* isArrayAccess, int* varCount) {
+    *varCount = 0;
+    if (!formatStr || formatStr[0] == '\0') return;
+    
+    const char* p = formatStr;
+    while (*p != '\0' && *varCount < MAX_VARIABLES) {
+        // Look for '{'
+        while (*p != '\0' && *p != '{') p++;
+        if (*p == '\0') break;
+        
+        p++; // Skip '{'
+        
+        // Extract variable name until '}' or '['
+        int nameLen = 0;
+        isArrayAccess[*varCount] = false;
+        indexExprs[*varCount][0] = '\0';
+        
+        while (*p != '\0' && *p != '}' && *p != '[' && nameLen < MAX_VAR_NAME_LENGTH - 1) {
+            char c = *p;
+            // Valid variable name characters
+            if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || 
+                (c >= '0' && c <= '9') || c == '_') {
+                varNames[*varCount][nameLen++] = c;
+                p++;
+            } else {
+                // Invalid character in placeholder, skip this placeholder
+                break;
+            }
+        }
+        
+        // Check if it's an array access
+        if (*p == '[' && nameLen > 0) {
+            isArrayAccess[*varCount] = true;
+            p++; // Skip '['
+            
+            // Extract index expression until ']'
+            int indexLen = 0;
+            while (*p != '\0' && *p != ']' && indexLen < MAX_VALUE_LENGTH - 1) {
+                indexExprs[*varCount][indexLen++] = *p++;
+            }
+            indexExprs[*varCount][indexLen] = '\0';
+            
+            if (*p == ']') {
+                p++; // Skip ']'
+            } else {
+                // Missing closing bracket, invalid placeholder
+                while (*p != '\0' && *p != '{') p++;
+                continue;
+            }
+        }
+        
+        if (*p == '}' && nameLen > 0) {
+            varNames[*varCount][nameLen] = '\0';
+            (*varCount)++;
+            p++; // Skip '}'
+        } else {
+            // Invalid placeholder, skip to next '{' or end
+            while (*p != '\0' && *p != '{') p++;
+        }
+    }
+}
+
+// Parse input block value (format: "varName" or "arrName[index]")
+static bool parse_input_block(const char* value, char* varName, char* indexExpr, bool* isArray) {
+    if (!value || value[0] == '\0') return false;
+    
+    // Skip whitespace
+    const char* p = value;
+    while (*p == ' ' || *p == '\t') p++;
+    
+    // Extract variable name
+    int nameLen = 0;
+    while (*p != '\0' && *p != ' ' && *p != '\t' && *p != '[' && nameLen < MAX_VAR_NAME_LENGTH - 1) {
+        char c = *p;
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || 
+            (c >= '0' && c <= '9') || c == '_') {
+            varName[nameLen++] = c;
+            p++;
+        } else {
+            break;
+        }
+    }
+    varName[nameLen] = '\0';
+    
+    if (nameLen == 0) return false;
+    
+    // Check for array access
+    *isArray = false;
+    indexExpr[0] = '\0';
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '[') {
+        *isArray = true;
+        p++; // Skip '['
+        
+        // Extract index expression until ']'
+        int indexLen = 0;
+        while (*p != '\0' && *p != ']' && indexLen < MAX_VALUE_LENGTH - 1) {
+            indexExpr[indexLen++] = *p++;
+        }
+        indexExpr[indexLen] = '\0';
+        
+        if (*p != ']') {
+            // Missing closing bracket
+            return false;
+        }
+    }
+    
+    return true;
+}
+
 // Validate assignment block
 static bool validate_assignment(const char* value) {
     char leftVar[MAX_VAR_NAME_LENGTH];
@@ -1755,6 +1926,174 @@ void edit_node_value(int nodeIndex) {
         snprintf(newValue, sizeof(newValue), "%s = %s", leftSide, exprResult);
         
         strncpy(node->value, newValue, MAX_VALUE_LENGTH - 1);
+        node->value[MAX_VALUE_LENGTH - 1] = '\0';
+        
+    } else if (node->type == NODE_INPUT) {
+        // INPUT BLOCK: Step 1 - Check if variables exist
+        if (variableCount == 0) {
+            tinyfd_messageBox("No Variables", 
+                "No variables declared yet. Please declare a variable first.",
+                "ok", "warning", 1);
+            return;
+        }
+        
+        // Step 2 - Build list of variable names for display
+        char varList[MAX_VALUE_LENGTH * 2] = "Available variables:\n";
+        for (int i = 0; i < variableCount; i++) {
+            const char* typeStr = "";
+            switch (variables[i].type) {
+                case VAR_TYPE_INT: typeStr = "int"; break;
+                case VAR_TYPE_REAL: typeStr = "real"; break;
+                case VAR_TYPE_STRING: typeStr = "string"; break;
+                case VAR_TYPE_BOOL: typeStr = "bool"; break;
+            }
+            char varEntry[MAX_VAR_NAME_LENGTH + 30];
+            if (variables[i].is_array) {
+                if (variables[i].array_size > 0) {
+                    snprintf(varEntry, sizeof(varEntry), "%d: %s %s[%d]\n", 
+                        i + 1, typeStr, variables[i].name, variables[i].array_size);
+                } else {
+                    snprintf(varEntry, sizeof(varEntry), "%d: %s %s[]\n", 
+                        i + 1, typeStr, variables[i].name);
+                }
+            } else {
+                snprintf(varEntry, sizeof(varEntry), "%d: %s %s\n", 
+                    i + 1, typeStr, variables[i].name);
+            }
+            strncat(varList, varEntry, sizeof(varList) - strlen(varList) - 1);
+        }
+        strncat(varList, "\nEnter variable number:", sizeof(varList) - strlen(varList) - 1);
+        
+        tinyfd_messageBox("Select Variable", varList, "ok", "info", 1);
+        
+        const char* varInput = tinyfd_inputBox("Select Variable", 
+            "Enter variable number (1 to list):", "1");
+        
+        if (!varInput || varInput[0] == '\0') return;
+        
+        int varChoice = atoi(varInput) - 1;
+        if (varChoice < 0 || varChoice >= variableCount) {
+            tinyfd_messageBox("Validation Error", "Invalid variable number.", "ok", "error", 1);
+            return;
+        }
+        
+        Variable* selectedVar = &variables[varChoice];
+        
+        // Step 3 - Get index if array
+        char indexExpr[MAX_VALUE_LENGTH] = "";
+        char newValue[MAX_VALUE_LENGTH];
+        
+        if (selectedVar->is_array) {
+            // Extract current index if block already has a value
+            if (node->value[0] != '\0') {
+                char varName[MAX_VAR_NAME_LENGTH];
+                char currentIndex[MAX_VALUE_LENGTH];
+                bool isArray;
+                if (parse_input_block(node->value, varName, currentIndex, &isArray)) {
+                    if (strcmp(varName, selectedVar->name) == 0 && isArray) {
+                        strncpy(indexExpr, currentIndex, MAX_VALUE_LENGTH - 1);
+                    }
+                }
+            }
+            
+            const char* indexInput = tinyfd_inputBox(
+                "Array Index",
+                "Enter index (integer literal or int variable, e.g., 0, i, i+1):",
+                indexExpr
+            );
+            
+            if (!indexInput || indexInput[0] == '\0') return;
+            
+            // Validate index expression
+            char errorMsg[MAX_VALUE_LENGTH];
+            int dummyIndex;
+            if (!evaluate_index_expression(indexInput, &dummyIndex, errorMsg)) {
+                tinyfd_messageBox("Validation Error", errorMsg, "ok", "error", 1);
+                return;
+            }
+            
+            // Check array bounds
+            if (!check_array_bounds(selectedVar->name, indexInput, errorMsg)) {
+                tinyfd_messageBox("Validation Error", errorMsg, "ok", "error", 1);
+                return;
+            }
+            
+            strncpy(indexExpr, indexInput, MAX_VALUE_LENGTH - 1);
+            indexExpr[MAX_VALUE_LENGTH - 1] = '\0';
+            
+            // Build value: arrName[index]
+            snprintf(newValue, sizeof(newValue), "%s[%s]", selectedVar->name, indexExpr);
+        } else {
+            // Not an array, just variable name
+            strncpy(newValue, selectedVar->name, MAX_VALUE_LENGTH - 1);
+            newValue[MAX_VALUE_LENGTH - 1] = '\0';
+        }
+        
+        // Step 4 - Save input block value
+        strncpy(node->value, newValue, MAX_VALUE_LENGTH - 1);
+        node->value[MAX_VALUE_LENGTH - 1] = '\0';
+        
+    } else if (node->type == NODE_OUTPUT) {
+        // OUTPUT BLOCK: Step 1 - Get format string
+        char currentFormat[MAX_VALUE_LENGTH] = "";
+        // Try to extract current format if block already has a value
+        if (node->value[0] != '\0') {
+            strncpy(currentFormat, node->value, MAX_VALUE_LENGTH - 1);
+            currentFormat[MAX_VALUE_LENGTH - 1] = '\0';
+        }
+        
+        const char* formatResult = tinyfd_inputBox(
+            "Output Format String",
+            "Enter format string with variable placeholders (e.g., \"Hello {name}, value is {x}\" or \"Array[0] = {arr[i]}\"):",
+            currentFormat
+        );
+        
+        if (!formatResult || formatResult[0] == '\0') return;
+        
+        // Step 2 - Extract and validate placeholders (including array accesses)
+        char varNames[MAX_VARIABLES][MAX_VAR_NAME_LENGTH];
+        char indexExprs[MAX_VARIABLES][MAX_VALUE_LENGTH];
+        bool isArrayAccess[MAX_VARIABLES];
+        int varCount = 0;
+        extract_output_placeholders_with_arrays(formatResult, varNames, indexExprs, isArrayAccess, &varCount);
+        
+        // Validate that all referenced variables exist and array accesses are valid
+        char errorMsg[MAX_VALUE_LENGTH];
+        for (int i = 0; i < varCount; i++) {
+            Variable* var = find_variable(varNames[i]);
+            if (!var) {
+                snprintf(errorMsg, MAX_VALUE_LENGTH, 
+                    "Variable '%s' referenced in format string is not declared", varNames[i]);
+                tinyfd_messageBox("Validation Error", errorMsg, "ok", "error", 1);
+                return;
+            }
+            
+            // If it's an array access, validate the index
+            if (isArrayAccess[i]) {
+                if (!var->is_array) {
+                    snprintf(errorMsg, MAX_VALUE_LENGTH, 
+                        "Variable '%s' is not an array, but array access syntax was used", varNames[i]);
+                    tinyfd_messageBox("Validation Error", errorMsg, "ok", "error", 1);
+                    return;
+                }
+                
+                // Validate index expression
+                int dummyIndex;
+                if (!evaluate_index_expression(indexExprs[i], &dummyIndex, errorMsg)) {
+                    tinyfd_messageBox("Validation Error", errorMsg, "ok", "error", 1);
+                    return;
+                }
+                
+                // Check array bounds
+                if (!check_array_bounds(varNames[i], indexExprs[i], errorMsg)) {
+                    tinyfd_messageBox("Validation Error", errorMsg, "ok", "error", 1);
+                    return;
+                }
+            }
+        }
+        
+        // Step 3 - Save output block value
+        strncpy(node->value, formatResult, MAX_VALUE_LENGTH - 1);
         node->value[MAX_VALUE_LENGTH - 1] = '\0';
         
     } else {
