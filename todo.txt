@@ -27,8 +27,12 @@ button hiver -
 
 change font -
 !figure out loops -> if with connect back dot
-!ZOOM OUT/FULLSCRENE
+!ZOOM OUT/FULLSCRENE -
 
 edit /
 delete -
-!add value
+!add value -
+
+алгоритъм за оразмеряване на блокове спрямо стойността
+цикли
+split up main into multiple files
