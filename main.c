@@ -5,6 +5,9 @@
 #include <math.h>
 #include <string.h>
 #include <time.h>
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 #define TINYFD_NOLIB
 #include "imports/tinyfiledialogs.h"
 #include "src/text_renderer.h"
@@ -1656,6 +1659,206 @@ void rebuild_variable_table(void) {
     }
 }
 
+// Dropdown list dialog helper function (returns selected index or -1 on cancel)
+// Similar to tinyfiledialogs, uses native OS dialogs
+static int tinyfd_listDialog(const char* aTitle, const char* aMessage, int numOptions, const char* const* options) {
+    if (numOptions <= 0 || !options) {
+        return -1;
+    }
+    
+#ifdef _WIN32
+    // Windows: Try PowerShell Out-GridView first, then fallback to VBScript InputBox
+    char tempFile[512];
+    char psFile[512];
+    char cmd[2048];
+    FILE* f;
+    int selected = -1;
+    
+    // Get temp directory
+    const char* tempDir = getenv("TEMP");
+    if (!tempDir) tempDir = getenv("TMP");
+    if (!tempDir) tempDir = "C:\\Windows\\Temp";
+    
+    snprintf(tempFile, sizeof(tempFile), "%s\\tinyfd_list_result.txt", tempDir);
+    snprintf(psFile, sizeof(psFile), "%s\\tinyfd_list.ps1", tempDir);
+    
+    // Try PowerShell Out-GridView first (provides a selection grid)
+    FILE* ps = fopen(psFile, "w");
+    if (ps) {
+        fprintf(ps, "$options = @(");
+        for (int i = 0; i < numOptions; i++) {
+            if (i > 0) fprintf(ps, ", ");
+            fprintf(ps, "'");
+            // Escape single quotes in PowerShell
+            for (int j = 0; options[i][j] != '\0'; j++) {
+                if (options[i][j] == '\'') {
+                    fprintf(ps, "''");
+                } else {
+                    fprintf(ps, "%c", options[i][j]);
+                }
+            }
+            fprintf(ps, "'");
+        }
+        fprintf(ps, ")\n");
+        fprintf(ps, "$selected = $options | Out-GridView -Title \"%s\" -OutputMode Single\n", 
+            aTitle ? aTitle : "Select");
+        fprintf(ps, "if ($selected) {\n");
+        fprintf(ps, "  $index = [array]::IndexOf($options, $selected)\n");
+        fprintf(ps, "  [System.IO.File]::WriteAllText(\"%s\", $index.ToString())\n", tempFile);
+        fprintf(ps, "}\n");
+        fclose(ps);
+        
+        // Run PowerShell script
+        snprintf(cmd, sizeof(cmd), "powershell -ExecutionPolicy Bypass -File \"%s\"", psFile);
+        int result = system(cmd);
+        
+        // Read result if PowerShell succeeded
+        if (result == 0) {
+            f = fopen(tempFile, "r");
+            if (f) {
+                char line[32];
+                if (fgets(line, sizeof(line), f)) {
+                    selected = atoi(line);
+                    if (selected < 0 || selected >= numOptions) {
+                        selected = -1;
+                    }
+                }
+                fclose(f);
+                remove(tempFile);
+            }
+        }
+        remove(psFile);
+    }
+    
+    // Fallback to console input if PowerShell failed
+    if (selected == -1) {
+        printf("\n%s\n", aTitle ? aTitle : "Select");
+        if (aMessage) {
+            printf("%s\n", aMessage);
+        }
+        printf("Options:\n");
+        for (int i = 0; i < numOptions; i++) {
+            printf("  %d: %s\n", i + 1, options[i]);
+        }
+        printf("Enter option number (1-%d): ", numOptions);
+        fflush(stdout);
+        
+        char input[32];
+        if (fgets(input, sizeof(input), stdin)) {
+            int choice = atoi(input) - 1;
+            if (choice >= 0 && choice < numOptions) {
+                selected = choice;
+            }
+        }
+    }
+    
+    return selected;
+#else
+    // Unix/Linux: Use zenity or kdialog
+    char cmd[4096];
+    FILE* pipe;
+    char result[256];
+    int selected = -1;
+    
+    // Try zenity first
+    snprintf(cmd, sizeof(cmd), "zenity --list --title=\"%s\" --text=\"%s\" --column=\"Options\"",
+        aTitle ? aTitle : "Select", aMessage ? aMessage : "");
+    
+    for (int i = 0; i < numOptions; i++) {
+        // Escape quotes in option text
+        char escaped[512];
+        int j = 0;
+        for (int k = 0; options[i][k] != '\0' && j < sizeof(escaped) - 1; k++) {
+            if (options[i][k] == '"' || options[i][k] == '\\') {
+                escaped[j++] = '\\';
+            }
+            escaped[j++] = options[i][k];
+        }
+        escaped[j] = '\0';
+        strncat(cmd, " \"", sizeof(cmd) - strlen(cmd) - 1);
+        strncat(cmd, escaped, sizeof(cmd) - strlen(cmd) - 1);
+        strncat(cmd, "\"", sizeof(cmd) - strlen(cmd) - 1);
+    }
+    
+    strncat(cmd, " 2>/dev/null", sizeof(cmd) - strlen(cmd) - 1);
+    
+    pipe = popen(cmd, "r");
+    if (pipe) {
+        if (fgets(result, sizeof(result), pipe)) {
+            // Remove newline
+            result[strcspn(result, "\n")] = '\0';
+            // Find which option was selected
+            for (int i = 0; i < numOptions; i++) {
+                if (strcmp(result, options[i]) == 0) {
+                    selected = i;
+                    break;
+                }
+            }
+        }
+        pclose(pipe);
+    } else {
+        // Try kdialog as fallback
+        snprintf(cmd, sizeof(cmd), "kdialog --title \"%s\" --combobox \"%s\"",
+            aTitle ? aTitle : "Select", aMessage ? aMessage : "");
+        
+        for (int i = 0; i < numOptions; i++) {
+            char escaped[512];
+            int j = 0;
+            for (int k = 0; options[i][k] != '\0' && j < sizeof(escaped) - 1; k++) {
+                if (options[i][k] == '"' || options[i][k] == '\\') {
+                    escaped[j++] = '\\';
+                }
+                escaped[j++] = options[i][k];
+            }
+            escaped[j] = '\0';
+            strncat(cmd, " \"", sizeof(cmd) - strlen(cmd) - 1);
+            strncat(cmd, escaped, sizeof(cmd) - strlen(cmd) - 1);
+            strncat(cmd, "\"", sizeof(cmd) - strlen(cmd) - 1);
+        }
+        
+        strncat(cmd, " 2>/dev/null", sizeof(cmd) - strlen(cmd) - 1);
+        
+        pipe = popen(cmd, "r");
+        if (pipe) {
+            if (fgets(result, sizeof(result), pipe)) {
+                result[strcspn(result, "\n")] = '\0';
+                for (int i = 0; i < numOptions; i++) {
+                    if (strcmp(result, options[i]) == 0) {
+                        selected = i;
+                        break;
+                    }
+                }
+            }
+            pclose(pipe);
+        }
+    }
+    
+    // Fallback to console input if native dialogs failed
+    if (selected == -1) {
+        printf("\n%s\n", aTitle ? aTitle : "Select");
+        if (aMessage) {
+            printf("%s\n", aMessage);
+        }
+        printf("Options:\n");
+        for (int i = 0; i < numOptions; i++) {
+            printf("  %d: %s\n", i + 1, options[i]);
+        }
+        printf("Enter option number (1-%d): ", numOptions);
+        fflush(stdout);
+        
+        char input[32];
+        if (fgets(input, sizeof(input), stdin)) {
+            int choice = atoi(input) - 1;
+            if (choice >= 0 && choice < numOptions) {
+                selected = choice;
+            }
+        }
+    }
+    
+    return selected;
+#endif
+}
+
 // Edit node value using text input dialog
 void edit_node_value(int nodeIndex) {
     if (nodeIndex < 0 || nodeIndex >= nodeCount) {
@@ -1665,26 +1868,14 @@ void edit_node_value(int nodeIndex) {
     FlowNode *node = &nodes[nodeIndex];
     
     if (node->type == NODE_DECLARE) {
-        // DECLARE BLOCK: Step 1 - Select type
-        int typeChoice = tinyfd_messageBox("Select Variable Type", 
-            "Choose the type:\n1 = int\n2 = real\n3 = string\n4 = bool\n\nEnter 1-4:", 
-            "okcancel", "question", 1);
-        
-        if (typeChoice == 0) return; // User cancelled
-        
-        const char* typePrompt = "Enter type number (1=int, 2=real, 3=string, 4=bool):";
-        const char* typeInput = tinyfd_inputBox("Variable Type", typePrompt, "1");
-        
-        if (!typeInput || typeInput[0] == '\0') return;
-        
-        int typeNum = atoi(typeInput);
-        if (typeNum < 1 || typeNum > 4) {
-            tinyfd_messageBox("Validation Error", "Invalid type number. Must be 1-4.", "ok", "error", 1);
-            return;
-        }
-        
-        VariableType selectedType = (VariableType)(typeNum - 1);
+        // DECLARE BLOCK: Step 1 - Select type using dropdown
         const char* typeOptions[] = {"int", "real", "string", "bool"};
+        int typeChoice = tinyfd_listDialog("Select Variable Type", 
+            "Choose the variable type:", 4, typeOptions);
+        
+        if (typeChoice < 0 || typeChoice >= 4) return; // User cancelled or invalid
+        
+        VariableType selectedType = (VariableType)typeChoice;
         const char* typeName = typeOptions[selectedType];
         
         // Step 2 - Get variable name
@@ -1790,8 +1981,9 @@ void edit_node_value(int nodeIndex) {
             return;
         }
         
-        // Build list of variable names for display
-        char varList[MAX_VALUE_LENGTH * 2] = "Available variables:\n";
+        // Build array of variable option strings for dropdown
+        char varOptions[MAX_VARIABLES][MAX_VAR_NAME_LENGTH + 30];
+        const char* varOptionPtrs[MAX_VARIABLES];
         for (int i = 0; i < variableCount; i++) {
             const char* typeStr = "";
             switch (variables[i].type) {
@@ -1800,34 +1992,26 @@ void edit_node_value(int nodeIndex) {
                 case VAR_TYPE_STRING: typeStr = "string"; break;
                 case VAR_TYPE_BOOL: typeStr = "bool"; break;
             }
-            char varEntry[MAX_VAR_NAME_LENGTH + 30];
             if (variables[i].is_array) {
                 if (variables[i].array_size > 0) {
-                    snprintf(varEntry, sizeof(varEntry), "%d: %s %s[%d]\n", 
-                        i + 1, typeStr, variables[i].name, variables[i].array_size);
+                    snprintf(varOptions[i], sizeof(varOptions[i]), "%s %s[%d]", 
+                        typeStr, variables[i].name, variables[i].array_size);
                 } else {
-                    snprintf(varEntry, sizeof(varEntry), "%d: %s %s[]\n", 
-                        i + 1, typeStr, variables[i].name);
+                    snprintf(varOptions[i], sizeof(varOptions[i]), "%s %s[]", 
+                        typeStr, variables[i].name);
                 }
             } else {
-                snprintf(varEntry, sizeof(varEntry), "%d: %s %s\n", 
-                    i + 1, typeStr, variables[i].name);
+                snprintf(varOptions[i], sizeof(varOptions[i]), "%s %s", 
+                    typeStr, variables[i].name);
             }
-            strncat(varList, varEntry, sizeof(varList) - strlen(varList) - 1);
+            varOptionPtrs[i] = varOptions[i];
         }
-        strncat(varList, "\nEnter variable number:", sizeof(varList) - strlen(varList) - 1);
         
-        tinyfd_messageBox("Select Variable", varList, "ok", "info", 1);
+        int varChoice = tinyfd_listDialog("Select Variable", 
+            "Choose the variable to assign to:", variableCount, varOptionPtrs);
         
-        const char* varInput = tinyfd_inputBox("Select Variable", 
-            "Enter variable number (1 to list):", "1");
-        
-        if (!varInput || varInput[0] == '\0') return;
-        
-        int varChoice = atoi(varInput) - 1;
         if (varChoice < 0 || varChoice >= variableCount) {
-            tinyfd_messageBox("Validation Error", "Invalid variable number.", "ok", "error", 1);
-            return;
+            return; // User cancelled or invalid
         }
         
         Variable* selectedVar = &variables[varChoice];
@@ -1940,8 +2124,9 @@ void edit_node_value(int nodeIndex) {
             return;
         }
         
-        // Step 2 - Build list of variable names for display
-        char varList[MAX_VALUE_LENGTH * 2] = "Available variables:\n";
+        // Step 2 - Build array of variable option strings for dropdown
+        char varOptions[MAX_VARIABLES][MAX_VAR_NAME_LENGTH + 30];
+        const char* varOptionPtrs[MAX_VARIABLES];
         for (int i = 0; i < variableCount; i++) {
             const char* typeStr = "";
             switch (variables[i].type) {
@@ -1950,34 +2135,26 @@ void edit_node_value(int nodeIndex) {
                 case VAR_TYPE_STRING: typeStr = "string"; break;
                 case VAR_TYPE_BOOL: typeStr = "bool"; break;
             }
-            char varEntry[MAX_VAR_NAME_LENGTH + 30];
             if (variables[i].is_array) {
                 if (variables[i].array_size > 0) {
-                    snprintf(varEntry, sizeof(varEntry), "%d: %s %s[%d]\n", 
-                        i + 1, typeStr, variables[i].name, variables[i].array_size);
+                    snprintf(varOptions[i], sizeof(varOptions[i]), "%s %s[%d]", 
+                        typeStr, variables[i].name, variables[i].array_size);
                 } else {
-                    snprintf(varEntry, sizeof(varEntry), "%d: %s %s[]\n", 
-                        i + 1, typeStr, variables[i].name);
+                    snprintf(varOptions[i], sizeof(varOptions[i]), "%s %s[]", 
+                        typeStr, variables[i].name);
                 }
             } else {
-                snprintf(varEntry, sizeof(varEntry), "%d: %s %s\n", 
-                    i + 1, typeStr, variables[i].name);
+                snprintf(varOptions[i], sizeof(varOptions[i]), "%s %s", 
+                    typeStr, variables[i].name);
             }
-            strncat(varList, varEntry, sizeof(varList) - strlen(varList) - 1);
+            varOptionPtrs[i] = varOptions[i];
         }
-        strncat(varList, "\nEnter variable number:", sizeof(varList) - strlen(varList) - 1);
         
-        tinyfd_messageBox("Select Variable", varList, "ok", "info", 1);
+        int varChoice = tinyfd_listDialog("Select Variable", 
+            "Choose the variable to read input into:", variableCount, varOptionPtrs);
         
-        const char* varInput = tinyfd_inputBox("Select Variable", 
-            "Enter variable number (1 to list):", "1");
-        
-        if (!varInput || varInput[0] == '\0') return;
-        
-        int varChoice = atoi(varInput) - 1;
         if (varChoice < 0 || varChoice >= variableCount) {
-            tinyfd_messageBox("Validation Error", "Invalid variable number.", "ok", "error", 1);
-            return;
+            return; // User cancelled or invalid
         }
         
         Variable* selectedVar = &variables[varChoice];
