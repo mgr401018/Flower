@@ -46,6 +46,17 @@ typedef enum {
     VAR_TYPE_BOOL = 3
 } VariableType;
 
+// Variable structure for tracking variable types
+typedef struct {
+    char name[MAX_VAR_NAME_LENGTH];
+    VariableType type;
+    bool is_array;
+} VarInfo;
+
+#define MAX_VARS 200
+static VarInfo varTable[MAX_VARS];
+static int varTableCount = 0;
+
 // Helper function to parse declare block
 static bool parse_declare_block(const char* value, char* varName, VariableType* varType, bool* isArray, int* arraySize) {
     if (!value || value[0] == '\0') return false;
@@ -93,6 +104,47 @@ static bool parse_declare_block(const char* value, char* varName, VariableType* 
     return true;
 }
 
+// Find variable in table
+static VarInfo* find_var(const char* name) {
+    for (int i = 0; i < varTableCount; i++) {
+        if (strcmp(varTable[i].name, name) == 0) {
+            return &varTable[i];
+        }
+    }
+    return NULL;
+}
+
+// Build variable table from declare blocks
+static void build_var_table(struct FlowNode* nodes, int nodeCount) {
+    varTableCount = 0;
+    for (int i = 0; i < nodeCount && varTableCount < MAX_VARS; i++) {
+        if (nodes[i].type == NODE_DECLARE) {
+            char varName[MAX_VAR_NAME_LENGTH];
+            VariableType varType;
+            bool isArray;
+            int arraySize;
+            
+            if (parse_declare_block(nodes[i].value, varName, &varType, &isArray, &arraySize)) {
+                strncpy(varTable[varTableCount].name, varName, MAX_VAR_NAME_LENGTH - 1);
+                varTable[varTableCount].name[MAX_VAR_NAME_LENGTH - 1] = '\0';
+                varTable[varTableCount].type = varType;
+                varTable[varTableCount].is_array = isArray;
+                varTableCount++;
+            }
+        }
+    }
+}
+
+// Check if any string variables exist
+static bool has_string_variables(void) {
+    for (int i = 0; i < varTableCount; i++) {
+        if (varTable[i].type == VAR_TYPE_STRING) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Helper function to parse assignment
 static bool parse_assignment(const char* value, char* leftVar, char* rightValue) {
     if (!value || value[0] == '\0') return false;
@@ -104,15 +156,12 @@ static bool parse_assignment(const char* value, char* leftVar, char* rightValue)
     
     // Extract left side (could be variable or array access)
     int leftLen = 0;
-    bool inArrayIndex = false;
     while (*p != '\0' && *p != '=' && leftLen < MAX_VAR_NAME_LENGTH - 1) {
         if (*p == '[') {
-            inArrayIndex = true;
             leftVar[leftLen++] = *p++;
             continue;
         }
         if (*p == ']') {
-            inArrayIndex = false;
             leftVar[leftLen++] = *p++;
             continue;
         }
@@ -269,7 +318,7 @@ static const char* get_scanf_format(VariableType type) {
 static const char* get_printf_format(VariableType type) {
     switch (type) {
         case VAR_TYPE_INT: return "%d";
-        case VAR_TYPE_REAL: return "%f";
+        case VAR_TYPE_REAL: return "%lf";
         case VAR_TYPE_STRING: return "%s";
         case VAR_TYPE_BOOL: return "%d";  // bool as int
         default: return "%d";
@@ -305,9 +354,15 @@ static bool export_to_c(const char* filename, struct FlowNode* nodes, int nodeCo
         return false;
     }
     
+    // Build variable table
+    build_var_table(nodes, nodeCount);
+    
     // Write includes
     fprintf(file, "#include <stdio.h>\n");
     fprintf(file, "#include <stdbool.h>\n");
+    if (has_string_variables()) {
+        fprintf(file, "#include <string.h>\n");
+    }
     fprintf(file, "\n");
     
     // Find START node
@@ -380,7 +435,54 @@ static bool export_to_c(const char* filename, struct FlowNode* nodes, int nodeCo
                 if (parse_assignment(node->value, leftVar, rightValue)) {
                     // Indent
                     for (int i = 0; i < indentLevel; i++) fprintf(file, "    ");
-                    fprintf(file, "%s = %s;\n", leftVar, rightValue);
+                    
+                    // Extract variable name from left side (could be array access)
+                    char leftVarName[MAX_VAR_NAME_LENGTH];
+                    int nameLen = 0;
+                    for (int i = 0; leftVar[i] != '\0' && leftVar[i] != '[' && nameLen < MAX_VAR_NAME_LENGTH - 1; i++) {
+                        leftVarName[nameLen++] = leftVar[i];
+                    }
+                    leftVarName[nameLen] = '\0';
+                    
+                    // Check if left variable is a string
+                    VarInfo* leftVarInfo = find_var(leftVarName);
+                    bool isStringAssignment = (leftVarInfo && leftVarInfo->type == VAR_TYPE_STRING);
+                    
+                    // Check if right value is a quoted string by looking at original string
+                    // Find the '=' sign and check if what follows starts with a quote
+                    const char* origValue = node->value;
+                    const char* eqPos = strchr(origValue, '=');
+                    bool isQuotedString = false;
+                    if (eqPos) {
+                        const char* afterEq = eqPos + 1;
+                        // Skip whitespace
+                        while (*afterEq == ' ' || *afterEq == '\t') afterEq++;
+                        // Check if it starts with a quote
+                        if (*afterEq == '"') {
+                            // Find the matching closing quote
+                            const char* endQuote = strchr(afterEq + 1, '"');
+                            if (endQuote) {
+                                // Check if there's nothing after the closing quote (or just whitespace)
+                                const char* afterEnd = endQuote + 1;
+                                while (*afterEnd == ' ' || *afterEnd == '\t') afterEnd++;
+                                if (*afterEnd == '\0' || *afterEnd == '\n' || *afterEnd == '\r') {
+                                    isQuotedString = true;
+                                }
+                            }
+                        }
+                    }
+                    
+                    // If it's a quoted string, it must be a string assignment - use strcpy
+                    // Even if we can't find the variable in the table, quoted strings can only be assigned to strings
+                    if (isQuotedString) {
+                        // Use strcpy for string assignments - need to reconstruct quoted string
+                        fprintf(file, "strcpy(%s, \"%s\");\n", leftVar, rightValue);
+                    } else if (isStringAssignment) {
+                        // String variable but not a quoted string (could be another string variable)
+                        fprintf(file, "%s = %s;\n", leftVar, rightValue);
+                    } else {
+                        fprintf(file, "%s = %s;\n", leftVar, rightValue);
+                    }
                 }
                 break;
             }
@@ -394,11 +496,15 @@ static bool export_to_c(const char* filename, struct FlowNode* nodes, int nodeCo
                     // Indent
                     for (int i = 0; i < indentLevel; i++) fprintf(file, "    ");
                     
-                    // For now, assume int type (could be improved by looking up variable)
+                    // Look up variable type
+                    VarInfo* varInfo = find_var(varName);
+                    VariableType varType = varInfo ? varInfo->type : VAR_TYPE_INT;
+                    const char* format = get_scanf_format(varType);
+                    
                     if (isArray) {
-                        fprintf(file, "scanf(\"%%d\", &%s[%s]);\n", varName, indexExpr);
+                        fprintf(file, "scanf(\"%s\", &%s[%s]);\n", format, varName, indexExpr);
                     } else {
-                        fprintf(file, "scanf(\"%%d\", &%s);\n", varName);
+                        fprintf(file, "scanf(\"%s\", &%s);\n", format, varName);
                     }
                 }
                 break;
@@ -426,9 +532,16 @@ static bool export_to_c(const char* filename, struct FlowNode* nodes, int nodeCo
                         if (*p == '{') {
                             // Replace placeholder
                             if (placeholderIdx < varCount) {
-                                // Add format specifier (assume int for now)
-                                formatStr[formatPos++] = '%';
-                                formatStr[formatPos++] = 'd';
+                                // Look up variable type and get format specifier
+                                VarInfo* varInfo = find_var(varNames[placeholderIdx]);
+                                VariableType varType = varInfo ? varInfo->type : VAR_TYPE_INT;
+                                const char* format = get_printf_format(varType);
+                                
+                                // Add format specifier
+                                int formatLen = strlen(format);
+                                for (int i = 0; i < formatLen && formatPos < (int)(sizeof(formatStr) - 1); i++) {
+                                    formatStr[formatPos++] = format[i];
+                                }
                                 
                                 // Add argument
                                 if (argsPos > 0) {

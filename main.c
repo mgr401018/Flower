@@ -649,7 +649,7 @@ void delete_node(int nodeIndex) {
 // Forward declarations
 void rebuild_variable_table(void);
 static bool parse_declare_block(const char* value, char* varName, VariableType* varType, bool* isArray, int* arraySize);
-static bool parse_assignment(const char* value, char* leftVar, char* rightValue, bool* isRightVar);
+static bool parse_assignment(const char* value, char* leftVar, char* rightValue, bool* isRightVar, bool* isQuotedString);
 static VariableType detect_literal_type(const char* value);
 static bool parse_array_access(const char* expr, char* arrayName, char* indexExpr);
 static bool evaluate_index_expression(const char* indexExpr, int* result, char* errorMsg);
@@ -1151,6 +1151,20 @@ static bool validate_expression(const char* expr, VariableType expectedType, Var
         return false;
     }
     
+    // Check if expression is a quoted string FIRST - if so, skip variable extraction
+    bool isQuotedString = (expr[0] == '"' && expr[strlen(expr) - 1] == '"');
+    
+    if (isQuotedString) {
+        // It's a quoted string literal - set type to STRING and skip variable extraction
+        *actualType = VAR_TYPE_STRING;
+        // Check if actual type matches expected
+        if (*actualType != expectedType) {
+            strcpy(errorMsg, "Expression type doesn't match variable type");
+            return false;
+        }
+        return true;
+    }
+    
     // Extract all variables from expression
     char varNames[MAX_VARIABLES][MAX_VAR_NAME_LENGTH];
     int varCount = 0;
@@ -1264,7 +1278,7 @@ static bool parse_declare_block(const char* value, char* varName, VariableType* 
 }
 
 // Parse assignment (format: "a = 5" or "a = b")
-static bool parse_assignment(const char* value, char* leftVar, char* rightValue, bool* isRightVar) {
+static bool parse_assignment(const char* value, char* leftVar, char* rightValue, bool* isRightVar, bool* isQuotedString) {
     if (!value || value[0] == '\0') return false;
     
     // Skip ":=" prefix if present
@@ -1306,9 +1320,11 @@ static bool parse_assignment(const char* value, char* leftVar, char* rightValue,
     p++;
     while (*p == ' ' || *p == '\t') p++;
     
-    // Extract right side
+    // Extract right side - track if it's a quoted string
+    bool startsWithQuote = (*p == '"');
     int rightLen = 0;
     bool inQuotes = false;
+    
     while (*p != '\0' && rightLen < MAX_VALUE_LENGTH - 1) {
         if (*p == '"' && (rightLen == 0 || rightValue[rightLen - 1] != '\\')) {
             inQuotes = !inQuotes;
@@ -1320,9 +1336,12 @@ static bool parse_assignment(const char* value, char* leftVar, char* rightValue,
     }
     rightValue[rightLen] = '\0';
     
-    // Determine if right side is a variable (starts with letter/underscore, no quotes)
+    // If it started with a quote and we're no longer in quotes, it's a complete quoted string
+    *isQuotedString = startsWithQuote && !inQuotes;
+    
+    // Determine if right side is a variable (starts with letter/underscore, not quoted)
     *isRightVar = false;
-    if (rightLen > 0 && !inQuotes) {
+    if (rightLen > 0 && !*isQuotedString) {
         char first = rightValue[0];
         if ((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || first == '_') {
             // Check if it's all alphanumeric/underscore (variable name)
@@ -1544,8 +1563,9 @@ static bool validate_assignment(const char* value) {
     char leftVar[MAX_VAR_NAME_LENGTH];
     char rightValue[MAX_VALUE_LENGTH];
     bool isRightVar = false;
+    bool isQuotedString = false;
     
-    if (!parse_assignment(value, leftVar, rightValue, &isRightVar)) {
+    if (!parse_assignment(value, leftVar, rightValue, &isRightVar, &isQuotedString)) {
         return false;
     }
     
@@ -1582,6 +1602,16 @@ static bool validate_assignment(const char* value) {
     }
     
     // Check right side - could be variable, array access, or literal
+    // IMPORTANT: Check isQuotedString FIRST - if it's a quoted string, it's a literal, not a variable
+    if (isQuotedString) {
+        // Right side is a quoted string literal - check type matches
+        if (leftVarInfo->type != VAR_TYPE_STRING) {
+            tinyfd_messageBox("Validation Error", "Type mismatch: quoted string can only be assigned to string variables", "ok", "error", 1);
+            return false;
+        }
+        return true; // Quoted string is valid for string variables
+    }
+    
     char rightArrayName[MAX_VAR_NAME_LENGTH];
     char rightIndexExpr[MAX_VALUE_LENGTH];
     bool isRightArray = parse_array_access(rightValue, rightArrayName, rightIndexExpr);
@@ -2072,7 +2102,8 @@ void edit_node_value(int nodeIndex) {
             char leftVar[MAX_VAR_NAME_LENGTH];
             char rightValue[MAX_VALUE_LENGTH];
             bool isRightVar = false;
-            if (parse_assignment(node->value, leftVar, rightValue, &isRightVar)) {
+            bool isQuotedString = false;
+            if (parse_assignment(node->value, leftVar, rightValue, &isRightVar, &isQuotedString)) {
                 strncpy(currentExpr, rightValue, MAX_VALUE_LENGTH - 1);
             }
         }
@@ -2389,21 +2420,12 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
         }
         if (cursor_over_button(buttonX_scaled, exportButtonY, window)) {
             // Export button clicked - show language selection and export
-            int langChoice = tinyfd_messageBox("Select Programming Language", 
-                "Choose the language:\n1 = C\n\nEnter 1:", 
-                "okcancel", "question", 1);
+            const char* langOptions[] = {"C"};
+            int langChoice = tinyfd_listDialog("Select Programming Language", 
+                "Choose the programming language:", 1, langOptions);
             
-            if (langChoice == 0) return; // User cancelled
-            
-            const char* langPrompt = "Enter language number (1=C):";
-            const char* langInput = tinyfd_inputBox("Programming Language", langPrompt, "1");
-            
-            if (!langInput || langInput[0] == '\0') return;
-            
-            int langNum = atoi(langInput);
-            if (langNum != 1) {
-                tinyfd_messageBox("Validation Error", "Invalid language number. Only C (1) is supported.", "ok", "error", 1);
-                return;
+            if (langChoice < 0 || langChoice >= 1) {
+                return; // User cancelled or invalid
             }
             
             const char* langName = "C";
