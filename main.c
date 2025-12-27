@@ -676,6 +676,11 @@ static Variable* find_variable(const char* name) {
 static bool is_valid_variable_name(const char* name) {
     if (!name || name[0] == '\0') return false;
     
+    // Reject reserved keywords: true and false
+    if (strcmp(name, "true") == 0 || strcmp(name, "false") == 0) {
+        return false;
+    }
+    
     // First character must be letter or underscore
     char first = name[0];
     if (!((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || first == '_')) {
@@ -1165,6 +1170,17 @@ static bool validate_expression(const char* expr, VariableType expectedType, Var
         return true;
     }
     
+    // Check if expression is a boolean literal (true/false) - skip variable extraction
+    if (strcmp(expr, "true") == 0 || strcmp(expr, "false") == 0) {
+        *actualType = VAR_TYPE_BOOL;
+        // Check if actual type matches expected
+        if (*actualType != expectedType) {
+            strcpy(errorMsg, "Expression type doesn't match variable type");
+            return false;
+        }
+        return true;
+    }
+    
     // Extract all variables from expression
     char varNames[MAX_VARIABLES][MAX_VAR_NAME_LENGTH];
     int varCount = 0;
@@ -1339,22 +1355,27 @@ static bool parse_assignment(const char* value, char* leftVar, char* rightValue,
     // If it started with a quote and we're no longer in quotes, it's a complete quoted string
     *isQuotedString = startsWithQuote && !inQuotes;
     
-    // Determine if right side is a variable (starts with letter/underscore, not quoted)
+    // Determine if right side is a variable (starts with letter/underscore, not quoted, not boolean literal)
     *isRightVar = false;
     if (rightLen > 0 && !*isQuotedString) {
-        char first = rightValue[0];
-        if ((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || first == '_') {
-            // Check if it's all alphanumeric/underscore (variable name)
-            bool isVar = true;
-            for (int i = 0; i < rightLen; i++) {
-                char c = rightValue[i];
-                if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || 
-                      (c >= '0' && c <= '9') || c == '_')) {
-                    isVar = false;
-                    break;
+        // Check if it's a boolean literal first - these are not variables
+        if (strcmp(rightValue, "true") == 0 || strcmp(rightValue, "false") == 0) {
+            *isRightVar = false; // Boolean literals are not variables
+        } else {
+            char first = rightValue[0];
+            if ((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || first == '_') {
+                // Check if it's all alphanumeric/underscore (variable name)
+                bool isVar = true;
+                for (int i = 0; i < rightLen; i++) {
+                    char c = rightValue[i];
+                    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || 
+                          (c >= '0' && c <= '9') || c == '_')) {
+                        isVar = false;
+                        break;
+                    }
                 }
+                *isRightVar = isVar;
             }
-            *isRightVar = isVar;
         }
     }
     

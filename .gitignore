@@ -9,3 +9,4 @@ triangle
 .vscode/
 .idea/
 .atom/
+output.c
