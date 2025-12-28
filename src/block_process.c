@@ -61,8 +61,9 @@ void draw_block_process(const struct FlowNode *n) {
     // Draw value text centered in the block
     if (n->value[0] != '\0') {
         float fontSize = n->height * 0.3f;
-        // Position text in the center of the block
-        float textX = n->x - n->width * 0.3f;
+        // Calculate text width and center it in the block
+        float textWidth = get_text_width(n->value, fontSize);
+        float textX = n->x - textWidth * 0.5f;  // Center the text
         float textY = n->y;
         draw_text(textX, textY, n->value, fontSize, 0.0f, 0.0f, 0.0f);
     }

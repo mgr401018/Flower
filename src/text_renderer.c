@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <GL/gl.h>
 
 #define FONT_TEXTURE_SIZE 512
@@ -130,7 +131,16 @@ void cleanup_text_renderer(void) {
 float get_text_width(const char* text, float fontSize) {
     if (!font_initialized || !text) return 0.0f;
     
-    float scale = fontSize / 32.0f;  // 32.0 is the baked font size
+    // Convert fontSize from normalized coordinates to pixels (same as draw_text)
+    // fontSize is in normalized coordinates (typically 0.01-0.1), convert to pixels
+    // Normalized coordinates go from -1 to 1, so total range is 2.0
+    // For height, we use window_height to convert
+    float fontSizeScaled = fontSize * flowchart_scale;
+    float fontSizePixels = (fontSizeScaled * window_height) / 2.0f;  // Convert normalized height to pixels
+    if (fontSizePixels < 12.0f) fontSizePixels = 18.0f;  // Minimum readable size (same as draw_text)
+    
+    // Calculate scale based on pixel font size vs baked font size (32 pixels)
+    float scale = fontSizePixels / 32.0f;  // 32.0 is the baked font size
     float width = 0.0f;
     
     for (const char* c = text; *c != '\0'; ++c) {
@@ -143,9 +153,14 @@ float get_text_width(const char* text, float fontSize) {
         }
     }
     
-    // Convert from pixel coordinates to normalized coordinates
-    // Account for aspect ratio: X range is now [-aspectRatio, aspectRatio]
-    return (width / window_width) * 2.0f * aspect_ratio;
+    // Convert from pixel coordinates to world coordinates
+    // When draw_text converts x to pixels: pixel_x = ((screen_normalized_x / aspect_ratio + 1.0f) / 2.0f) * window_width
+    // Where screen_normalized_x = flowchart_scale * x - scroll_offset_x
+    // For width (a difference), we need to reverse this conversion:
+    // width_pixel = width_world * flowchart_scale / aspect_ratio * window_width / 2.0f
+    // Therefore: width_world = width_pixel * 2.0f * aspect_ratio / (flowchart_scale * window_width)
+    // But since we're calculating width_pixel from font metrics, we need to convert back:
+    return (width / window_width) * 2.0f * aspect_ratio / flowchart_scale;
 }
 
 float draw_text(float x, float y, const char* text, float fontSize, float r, float g, float b) {

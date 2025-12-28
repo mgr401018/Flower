@@ -180,6 +180,26 @@ static double snap_to_grid_y(double y) {
     return grid_to_world_y(world_to_grid_y(y));
 }
 
+// Calculate block width based on text content
+static float calculate_block_width(const char* text, float fontSize, float minWidth) {
+    if (!text || text[0] == '\0') {
+        return minWidth;
+    }
+    
+    float textWidth = get_text_width(text, fontSize);
+    // Padding should be proportional to font size for better scaling
+    // Use 1.5x font size as padding (0.75x on each side)
+    float padding = fontSize * 1.5f;
+    float requiredWidth = textWidth + padding;
+    
+    // Round up to nearest grid cell multiple
+    int gridCells = (int)ceil(requiredWidth / GRID_CELL_SIZE);
+    float gridAlignedWidth = gridCells * GRID_CELL_SIZE;
+    
+    // Ensure minimum width
+    return gridAlignedWidth > minWidth ? gridAlignedWidth : minWidth;
+}
+
 // Cursor position callback
 void cursor_position_callback(GLFWwindow* window, double xpos, double ypos) {
     int width, height;
@@ -457,9 +477,20 @@ void load_flowchart(const char* filename) {
         // Snap loaded nodes to grid
         nodes[i].x = snap_to_grid_x(x);
         nodes[i].y = snap_to_grid_y(y);
-        nodes[i].width = width;
         nodes[i].height = height;
         nodes[i].type = (NodeType)nodeType;
+        
+        // Recalculate width for content blocks based on text content
+        if (nodes[i].type == NODE_PROCESS || nodes[i].type == NODE_NORMAL ||
+            nodes[i].type == NODE_INPUT || nodes[i].type == NODE_OUTPUT ||
+            nodes[i].type == NODE_ASSIGNMENT || nodes[i].type == NODE_DECLARE) {
+            float fontSize = nodes[i].height * 0.3f;
+            nodes[i].width = calculate_block_width(nodes[i].value, fontSize, 0.35f);
+        } else {
+            // START and END blocks keep their loaded width
+            nodes[i].width = width;
+        }
+        
         nodeCount++;
     }
     
@@ -2020,6 +2051,10 @@ void edit_node_value(int nodeIndex) {
         strncpy(node->value, newValue, MAX_VALUE_LENGTH - 1);
         node->value[MAX_VALUE_LENGTH - 1] = '\0';
         
+        // Recalculate width based on text content
+        float fontSize = node->height * 0.3f;
+        node->width = calculate_block_width(node->value, fontSize, 0.35f);
+        
         // Rebuild variable table
         rebuild_variable_table();
         
@@ -2167,6 +2202,10 @@ void edit_node_value(int nodeIndex) {
         strncpy(node->value, newValue, MAX_VALUE_LENGTH - 1);
         node->value[MAX_VALUE_LENGTH - 1] = '\0';
         
+        // Recalculate width based on text content
+        float fontSize = node->height * 0.3f;
+        node->width = calculate_block_width(node->value, fontSize, 0.35f);
+        
     } else if (node->type == NODE_INPUT) {
         // INPUT BLOCK: Step 1 - Check if variables exist
         if (variableCount == 0) {
@@ -2265,6 +2304,10 @@ void edit_node_value(int nodeIndex) {
         strncpy(node->value, newValue, MAX_VALUE_LENGTH - 1);
         node->value[MAX_VALUE_LENGTH - 1] = '\0';
         
+        // Recalculate width based on text content
+        float fontSize = node->height * 0.3f;
+        node->width = calculate_block_width(node->value, fontSize, 0.35f);
+        
     } else if (node->type == NODE_OUTPUT) {
         // OUTPUT BLOCK: Step 1 - Get format string
         char currentFormat[MAX_VALUE_LENGTH] = "";
@@ -2328,6 +2371,10 @@ void edit_node_value(int nodeIndex) {
         strncpy(node->value, formatResult, MAX_VALUE_LENGTH - 1);
         node->value[MAX_VALUE_LENGTH - 1] = '\0';
         
+        // Recalculate width based on text content
+        float fontSize = node->height * 0.3f;
+        node->width = calculate_block_width(node->value, fontSize, 0.35f);
+        
     } else {
         // Other block types - use simple input dialog
         const char* result = tinyfd_inputBox(
@@ -2339,6 +2386,12 @@ void edit_node_value(int nodeIndex) {
         if (result != NULL) {
             strncpy(node->value, result, MAX_VALUE_LENGTH - 1);
             node->value[MAX_VALUE_LENGTH - 1] = '\0';
+            
+            // Recalculate width based on text content for content blocks
+            if (node->type == NODE_PROCESS || node->type == NODE_NORMAL) {
+                float fontSize = node->height * 0.3f;
+                node->width = calculate_block_width(node->value, fontSize, 0.35f);
+            }
         }
     }
 }
@@ -2363,10 +2416,14 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
     FlowNode *newNode = &nodes[nodeCount];
     newNode->x = snap_to_grid_x(from->x);  // Keep same X grid position
     newNode->y = snap_to_grid_y(grid_to_world_y(newGridY));  // One grid cell below
-    newNode->width = 0.35f;
     newNode->height = 0.22f;
     newNode->value[0] = '\0';  // Initialize value as empty string
     newNode->type = nodeType;
+    
+    // Calculate initial width (will be recalculated when value is set)
+    float fontSize = newNode->height * 0.3f;
+    newNode->width = calculate_block_width(newNode->value, fontSize, 0.35f);
+    
     int newNodeIndex = nodeCount;
     nodeCount++;
     
@@ -2616,8 +2673,9 @@ void drawFlowNode(const FlowNode *n) {
         // Draw value text if present centered in the block
         if (n->value[0] != '\0') {
             float fontSize = n->height * 0.3f;
-            // Position text in the center of the block
-            float textX = n->x - n->width * 0.3f;
+            // Calculate text width and center it in the block
+            float textWidth = get_text_width(n->value, fontSize);
+            float textX = n->x - textWidth * 0.5f;  // Center the text
             float textY = n->y;
             draw_text(textX, textY, n->value, fontSize, 0.0f, 0.0f, 0.0f);
         }
@@ -2657,8 +2715,9 @@ void drawFlowNode(const FlowNode *n) {
         // Draw value text if present centered in the block
         if (n->value[0] != '\0') {
             float fontSize = n->height * 0.3f;
-            // Position text in the center of the block
-            float textX = n->x - n->width * 0.3f;
+            // Calculate text width and center it in the block
+            float textWidth = get_text_width(n->value, fontSize);
+            float textX = n->x - textWidth * 0.5f;  // Center the text
             float textY = n->y;
             draw_text(textX, textY, n->value, fontSize, 0.0f, 0.0f, 0.0f);
         }
