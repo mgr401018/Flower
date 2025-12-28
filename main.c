@@ -186,6 +186,12 @@ static float calculate_block_width(const char* text, float fontSize, float minWi
         return minWidth;
     }
     
+    // Don't expand blocks for short text (3 characters or less)
+    int textLen = strlen(text);
+    if (textLen <= 3) {
+        return minWidth;
+    }
+    
     float textWidth = get_text_width(text, fontSize);
     // Padding should be proportional to font size for better scaling
     // Use 1.5x font size as padding (0.75x on each side)
