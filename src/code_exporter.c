@@ -35,7 +35,9 @@ typedef enum {
     NODE_INPUT = 4,
     NODE_OUTPUT = 5,
     NODE_ASSIGNMENT = 6,
-    NODE_DECLARE = 7
+    NODE_DECLARE = 7,
+    NODE_IF = 8,
+    NODE_CONVERGE = 9
 } NodeType;
 
 // Variable types (must match main.c)
@@ -594,6 +596,22 @@ static bool export_to_c(const char* filename, struct FlowNode* nodes, int nodeCo
             
             case NODE_END:
                 // Will be handled after loop
+                break;
+            
+            case NODE_IF:
+                // IF block - generate if statement
+                // Note: Full branch support would require more complex logic
+                // For now, just output a comment
+                for (int i = 0; i < indentLevel; i++) fprintf(file, "    ");
+                if (node->value[0] != '\0') {
+                    fprintf(file, "// IF: %s\n", node->value);
+                } else {
+                    fprintf(file, "// IF\n");
+                }
+                break;
+            
+            case NODE_CONVERGE:
+                // Convergence point - no code generation needed
                 break;
                 
             default:
