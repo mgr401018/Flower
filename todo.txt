@@ -36,3 +36,7 @@ delete -
 алгоритъм за оразмеряване на блокове спрямо стойността
 цикли
 split up main into multiple files
+
+if up down when converge of upper if up down
+branch dissapearance
+if without elements be the same length as an if with 1 element
