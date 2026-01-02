@@ -259,6 +259,35 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
     scrollOffsetY += yoffset * 0.1;  // Smooth vertical scrolling factor
 }
 
+// Keyboard callback for arrow key scrolling
+void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
+    (void)window;   // Mark as intentionally unused
+    (void)scancode; // Mark as intentionally unused
+    (void)mods;     // Mark as intentionally unused
+    
+    // Only handle key press and repeat events (not release)
+    if (action == GLFW_PRESS || action == GLFW_REPEAT) {
+        const double scrollSpeed = 0.1;  // Same speed as mouse wheel scrolling
+        
+        switch (key) {
+            case GLFW_KEY_LEFT:
+                scrollOffsetX -= scrollSpeed;
+                break;
+            case GLFW_KEY_RIGHT:
+                scrollOffsetX += scrollSpeed;
+                break;
+            case GLFW_KEY_UP:
+                scrollOffsetY += scrollSpeed;
+                break;
+            case GLFW_KEY_DOWN:
+                scrollOffsetY -= scrollSpeed;
+                break;
+            default:
+                break;
+        }
+    }
+}
+
 // Check if cursor is over a menu item (deprecated - menu width is now dynamic)
 // This function is kept for compatibility but may not work correctly
 bool cursor_over_menu_item(double menuX, double menuY, int itemIndex) {
@@ -5923,6 +5952,7 @@ int main(void) {
     glfwSetCursorPosCallback(window, cursor_position_callback);
     glfwSetMouseButtonCallback(window, mouse_button_callback);
     glfwSetScrollCallback(window, scroll_callback);
+    glfwSetKeyCallback(window, key_callback);
     
     // Initialize text renderer with embedded DejaVu Sans Mono font
     int width, height;
