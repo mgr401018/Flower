@@ -43,3 +43,4 @@ if without elements be the same length as an if with 1 element
 
 adding process above if, and removing process above nested if give issues
 file save, load, export
+convergance point need to remember the id of the if, and allow no other if's branches to connect to them
