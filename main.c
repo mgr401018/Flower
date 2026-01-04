@@ -3532,7 +3532,7 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
                             {
                                 FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
                                 if (f) {
-                                    fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"insert-above-regular-if\",\"hypothesisId\":\"H7\",\"location\":\"main.c:insert_node_in_connection:detect_regular_if\",\"message\":\"Detected regular IF when inserting above\",\"data\":{\"targetRegularIfBlock\":%d,\"targetRegularIfConvergeIdx\":%d,\"ifNodeY\":%.3f,\"convergeY\":%.3f,\"fromY\":%.3f,\"toY\":%.3f,\"isAboveIF\":%d,\"isAboveConverge\":%d},\"timestamp\":%ld}\n",
+                                    fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"chained-if-fix\",\"hypothesisId\":\"H8\",\"location\":\"main.c:insert_node_in_connection:detect_regular_if\",\"message\":\"Detected regular IF when inserting above\",\"data\":{\"targetRegularIfBlock\":%d,\"targetRegularIfConvergeIdx\":%d,\"ifNodeY\":%.3f,\"convergeY\":%.3f,\"fromY\":%.3f,\"toY\":%.3f,\"isAboveIF\":%d,\"isAboveConverge\":%d},\"timestamp\":%ld}\n",
                                         j, convergeIdx, nodes[ifNodeIdx].y, (convergeIdx >= 0 && convergeIdx < nodeCount) ? nodes[convergeIdx].y : -999.0, from->y, to->y, isAboveIF, isAboveConverge, time(NULL));
                                     fclose(f);
                                 }
@@ -3889,12 +3889,22 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
             // 1. Inserting from an IF node (from->type == NODE_IF)
             // 2. OR when inserting above a nested IF (insertingAboveNestedIF is true)
             // 3. OR when inserting above a regular IF (targetRegularIfBlock >= 0)
+            // BUT: When inserting above a regular IF, only push nodes that belong to that specific IF,
+            // not nodes that belong to other IFs (like chained IFs)
             if (!shouldPush && (from->type == NODE_IF || insertingAboveNestedIF || targetRegularIfBlock >= 0)) {
                 // Check if this node belongs to any IF block that's being pushed
                 // When inserting above a nested IF, also check the target nested IF and its nested IFs
                 for (int pushedIdx = 0; pushedIdx < pushedIfBlockCount; pushedIdx++) {
                     int ifBlockIdx = pushedIfBlocks[pushedIdx];
                     if (ifBlockIdx >= 0 && ifBlockIdx < ifBlockCount) {
+                        // When inserting above a regular IF, only push nodes that belong to that specific IF
+                        // Skip nodes that belong to other IFs (chained IFs)
+                        if (targetRegularIfBlock >= 0 && !insertingAboveNestedIF && from->type != NODE_IF) {
+                            if (ifBlockIdx != targetRegularIfBlock) {
+                                // This IF block is not the target regular IF - skip it
+                                continue;
+                            }
+                        }
                         // Get original convergence Y (stored before any pushes)
                         int convergeIdx = ifBlocks[ifBlockIdx].convergeNodeIndex;
                         double originalConvergeY = originalConvergeYs[ifBlockIdx];
@@ -3971,6 +3981,23 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
                             int ifParentIdx = ifBlocks[ifBlockIdx].parentIfIndex;
                             bool isInSameParentBranch = (ifParentIdx >= 0 && nodes[i].owningIfBlock == ifParentIdx);
                             
+                            // When inserting above a regular IF, don't push nodes that belong to a different IF
+                            // (like chained IFs)
+                            bool belongsToDifferentIF = false;
+                            if (targetRegularIfBlock >= 0 && !insertingAboveNestedIF && from->type != NODE_IF) {
+                                if (nodes[i].owningIfBlock >= 0 && nodes[i].owningIfBlock < ifBlockCount) {
+                                    if (nodes[i].owningIfBlock != targetRegularIfBlock) {
+                                        belongsToDifferentIF = true;
+                                    }
+                                }
+                                // Also check if node is in a branch of a different IF
+                                if (nodes[i].branchColumn != 0 && nodes[i].owningIfBlock >= 0 && 
+                                    nodes[i].owningIfBlock < ifBlockCount && 
+                                    nodes[i].owningIfBlock != targetRegularIfBlock) {
+                                    belongsToDifferentIF = true;
+                                }
+                            }
+                            
                             // Don't move nodes from a different nested IF that's a sibling
                             bool isFromDifferentNestedIF = false;
                             if (nodes[i].owningIfBlock >= 0 && nodes[i].owningIfBlock < ifBlockCount) {
@@ -3994,14 +4021,14 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
                             {
                                 FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
                                 if (f) {
-                                    fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"insert-after-if-fix\",\"hypothesisId\":\"H4\",\"location\":\"main.c:insert_node_in_connection:check_below_converge\",\"message\":\"Checking if node below convergence should be pushed\",\"data\":{\"nodeIndex\":%d,\"ifBlockIdx\":%d,\"convergeIdx\":%d,\"nodeY\":%.3f,\"convergeY\":%.3f,\"nodeBranchColumn\":%d,\"nodeOwningIfBlock\":%d,\"ifParentIdx\":%d,\"isMainBranch\":%d,\"isInSameParentBranch\":%d,\"isInNestedIfBranch\":%d,\"isFromDifferentNestedIF\":%d},\"timestamp\":%ld}\n",
-                                            i, ifBlockIdx, convergeIdx, nodes[i].y, nodes[convergeIdx].y, nodes[i].branchColumn, nodes[i].owningIfBlock, ifParentIdx, isMainBranch, isInSameParentBranch, isInNestedIfBranch, isFromDifferentNestedIF, time(NULL));
+                                    fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"insert-after-if-fix\",\"hypothesisId\":\"H4\",\"location\":\"main.c:insert_node_in_connection:check_below_converge\",\"message\":\"Checking if node below convergence should be pushed\",\"data\":{\"nodeIndex\":%d,\"ifBlockIdx\":%d,\"convergeIdx\":%d,\"nodeY\":%.3f,\"convergeY\":%.3f,\"nodeBranchColumn\":%d,\"nodeOwningIfBlock\":%d,\"ifParentIdx\":%d,\"isMainBranch\":%d,\"isInSameParentBranch\":%d,\"isInNestedIfBranch\":%d,\"isFromDifferentNestedIF\":%d,\"belongsToDifferentIF\":%d},\"timestamp\":%ld}\n",
+                                            i, ifBlockIdx, convergeIdx, nodes[i].y, nodes[convergeIdx].y, nodes[i].branchColumn, nodes[i].owningIfBlock, ifParentIdx, isMainBranch, isInSameParentBranch, isInNestedIfBranch, isFromDifferentNestedIF, belongsToDifferentIF, time(NULL));
                                     fclose(f);
                                 }
                             }
                             // #endregion
                             
-                            if ((isMainBranch || isInSameParentBranch || isInNestedIfBranch) && !isFromDifferentNestedIF) {
+                            if ((isMainBranch || isInSameParentBranch || isInNestedIfBranch) && !isFromDifferentNestedIF && !belongsToDifferentIF) {
                                 shouldPush = true;
                                 
                                 // #region agent log
@@ -4028,15 +4055,40 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
                 // Check if this node is below the convergence point
                 if (nodes[i].y < nodes[targetRegularIfConvergeIdx].y) {
                     // Only push nodes in the main branch (not owned by any IF block)
+                    // BUT: Don't push nodes that belong to a different IF's branches
                     bool isMainBranch = (nodes[i].branchColumn == 0 && nodes[i].owningIfBlock < 0);
-                    if (isMainBranch) {
+                    
+                    // Check if this node belongs to a different IF's branches
+                    bool belongsToDifferentIF = false;
+                    if (nodes[i].owningIfBlock >= 0 && nodes[i].owningIfBlock < ifBlockCount) {
+                        // This node belongs to an IF block - check if it's different from targetRegularIfBlock
+                        if (nodes[i].owningIfBlock != targetRegularIfBlock) {
+                            belongsToDifferentIF = true;
+                        }
+                    }
+                    
+                    // Also check if this node is in a branch (branchColumn != 0) of any IF
+                    bool isInBranch = (nodes[i].branchColumn != 0);
+                    
+                    if (isMainBranch && !belongsToDifferentIF && !isInBranch) {
                         shouldPush = true;
                         // #region agent log
                         {
                             FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
                             if (f) {
-                                fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"insert-above-regular-if\",\"hypothesisId\":\"H7\",\"location\":\"main.c:insert_node_in_connection:push_below_regular_if_converge\",\"message\":\"Pushing node below regular IF convergence\",\"data\":{\"nodeIndex\":%d,\"targetRegularIfBlock\":%d,\"targetRegularIfConvergeIdx\":%d,\"nodeY\":%.3f,\"convergeY\":%.3f},\"timestamp\":%ld}\n",
-                                    i, targetRegularIfBlock, targetRegularIfConvergeIdx, nodes[i].y, nodes[targetRegularIfConvergeIdx].y, time(NULL));
+                                fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"chained-if-fix\",\"hypothesisId\":\"H8\",\"location\":\"main.c:insert_node_in_connection:push_below_regular_if_converge\",\"message\":\"Pushing node below regular IF convergence\",\"data\":{\"nodeIndex\":%d,\"targetRegularIfBlock\":%d,\"targetRegularIfConvergeIdx\":%d,\"nodeY\":%.3f,\"convergeY\":%.3f,\"nodeBranchColumn\":%d,\"nodeOwningIfBlock\":%d,\"isMainBranch\":%d,\"belongsToDifferentIF\":%d,\"isInBranch\":%d},\"timestamp\":%ld}\n",
+                                    i, targetRegularIfBlock, targetRegularIfConvergeIdx, nodes[i].y, nodes[targetRegularIfConvergeIdx].y, nodes[i].branchColumn, nodes[i].owningIfBlock, isMainBranch, belongsToDifferentIF, isInBranch, time(NULL));
+                                fclose(f);
+                            }
+                        }
+                        // #endregion
+                    } else {
+                        // #region agent log
+                        {
+                            FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
+                            if (f) {
+                                fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"chained-if-fix\",\"hypothesisId\":\"H8\",\"location\":\"main.c:insert_node_in_connection:skip_below_regular_if_converge\",\"message\":\"Skipping node below regular IF convergence\",\"data\":{\"nodeIndex\":%d,\"targetRegularIfBlock\":%d,\"targetRegularIfConvergeIdx\":%d,\"nodeY\":%.3f,\"convergeY\":%.3f,\"nodeBranchColumn\":%d,\"nodeOwningIfBlock\":%d,\"isMainBranch\":%d,\"belongsToDifferentIF\":%d,\"isInBranch\":%d},\"timestamp\":%ld}\n",
+                                    i, targetRegularIfBlock, targetRegularIfConvergeIdx, nodes[i].y, nodes[targetRegularIfConvergeIdx].y, nodes[i].branchColumn, nodes[i].owningIfBlock, isMainBranch, belongsToDifferentIF, isInBranch, time(NULL));
                                 fclose(f);
                             }
                         }
@@ -4146,7 +4198,9 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
             // So we should NOT push them again in the second pass to avoid double movement
             // Only push branch nodes in the second pass if we're NOT inserting above a nested IF
             // OR if this is a different IF block (not the target nested IF)
-            bool skipBranchPush = (insertingAboveNestedIF && ifBlockIdx == targetNestedIfBlock);
+            // Also skip when inserting above a regular IF - branch nodes are already pushed in first pass
+            bool skipBranchPush = (insertingAboveNestedIF && ifBlockIdx == targetNestedIfBlock) ||
+                                  (targetRegularIfBlock >= 0 && ifBlockIdx == targetRegularIfBlock);
             
             if (!skipBranchPush) {
                 // When inserting above a nested IF, push ALL branch nodes (both true and false branches)
