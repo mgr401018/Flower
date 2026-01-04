@@ -533,17 +533,17 @@ void save_flowchart(const char* filename) {
                 ifBlocks[i].trueBranchCount,
                 ifBlocks[i].falseBranchCount);
         
-        // Write true branch nodes
+        // Write true branch nodes (always write a newline, even if empty)
         for (int j = 0; j < ifBlocks[i].trueBranchCount; j++) {
             fprintf(file, "%d ", ifBlocks[i].trueBranchNodes[j]);
         }
-        if (ifBlocks[i].trueBranchCount > 0) fprintf(file, "\n");
+        fprintf(file, "\n");  // Always write newline, even for empty branches
         
-        // Write false branch nodes
+        // Write false branch nodes (always write a newline, even if empty)
         for (int j = 0; j < ifBlocks[i].falseBranchCount; j++) {
             fprintf(file, "%d ", ifBlocks[i].falseBranchNodes[j]);
         }
-        if (ifBlocks[i].falseBranchCount > 0) fprintf(file, "\n");
+        fprintf(file, "\n");  // Always write newline, even for empty branches
     }
     
     fclose(file);
@@ -712,41 +712,373 @@ void load_flowchart(const char* filename) {
         }
         
         // Read true branch nodes
-        for (int j = 0; j < ifBlocks[i].trueBranchCount; j++) {
-            if (fscanf(file, "%d", &ifBlocks[i].trueBranchNodes[j]) != 1) {
-                fprintf(stderr, "Error reading true branch nodes\n");
+        // First, peek at the next line to check if it's "EMPTY"
+        long filePos = ftell(file);
+        char lineBuffer[256];
+        if (fgets(lineBuffer, sizeof(lineBuffer), file) == NULL) {
+            fprintf(stderr, "Error reading true branch line\n");
+            break;
+        }
+        
+        // Remove trailing newline
+        lineBuffer[strcspn(lineBuffer, "\n")] = 0;
+        
+        // Trim whitespace
+        char *trimmed = lineBuffer;
+        while (*trimmed == ' ' || *trimmed == '\t') trimmed++;
+        int len = strlen(trimmed);
+        while (len > 0 && (trimmed[len-1] == ' ' || trimmed[len-1] == '\t')) {
+            trimmed[--len] = '\0';
+        }
+        
+        // Check if line is "EMPTY" marker
+        if (strcmp(trimmed, "EMPTY") == 0) {
+            // Empty branch - verify count matches
+            if (ifBlocks[i].trueBranchCount != 0) {
+                fprintf(stderr, "Warning: True branch marked EMPTY but count is %d, setting to 0\n", ifBlocks[i].trueBranchCount);
+                ifBlocks[i].trueBranchCount = 0;
+            }
+        } else {
+            // Not empty - rewind and parse node indices
+            fseek(file, filePos, SEEK_SET);
+            
+            if (ifBlocks[i].trueBranchCount > 0) {
+                for (int j = 0; j < ifBlocks[i].trueBranchCount; j++) {
+                    if (fscanf(file, "%d", &ifBlocks[i].trueBranchNodes[j]) != 1) {
+                        fprintf(stderr, "Error reading true branch nodes\n");
+                        break;
+                    }
+                }
+            }
+            // Skip rest of line (spaces and newline)
+            if (fgets(lineBuffer, sizeof(lineBuffer), file) == NULL) {
+                fprintf(stderr, "Error reading true branch line terminator\n");
                 break;
             }
         }
         
         // Read false branch nodes
-        for (int j = 0; j < ifBlocks[i].falseBranchCount; j++) {
-            if (fscanf(file, "%d", &ifBlocks[i].falseBranchNodes[j]) != 1) {
-                fprintf(stderr, "Error reading false branch nodes\n");
+        // First, peek at the next line to check if it's "EMPTY"
+        long filePosFalse = ftell(file);
+        if (fgets(lineBuffer, sizeof(lineBuffer), file) == NULL) {
+            fprintf(stderr, "Error reading false branch line\n");
+            break;
+        }
+        
+        // Remove trailing newline
+        lineBuffer[strcspn(lineBuffer, "\n")] = 0;
+        
+        // Trim whitespace
+        char *trimmedFalse = lineBuffer;
+        while (*trimmedFalse == ' ' || *trimmedFalse == '\t') trimmedFalse++;
+        int lenFalse = strlen(trimmedFalse);
+        while (lenFalse > 0 && (trimmedFalse[lenFalse-1] == ' ' || trimmedFalse[lenFalse-1] == '\t')) {
+            trimmedFalse[--lenFalse] = '\0';
+        }
+        
+        // Check if line is "EMPTY" marker
+        if (strcmp(trimmedFalse, "EMPTY") == 0) {
+            // Empty branch - verify count matches
+            if (ifBlocks[i].falseBranchCount != 0) {
+                fprintf(stderr, "Warning: False branch marked EMPTY but count is %d, setting to 0\n", ifBlocks[i].falseBranchCount);
+                ifBlocks[i].falseBranchCount = 0;
+            }
+        } else {
+            // Not empty - rewind and parse node indices
+            fseek(file, filePosFalse, SEEK_SET);
+            
+            if (ifBlocks[i].falseBranchCount > 0) {
+                for (int j = 0; j < ifBlocks[i].falseBranchCount; j++) {
+                    if (fscanf(file, "%d", &ifBlocks[i].falseBranchNodes[j]) != 1) {
+                        fprintf(stderr, "Error reading false branch nodes\n");
+                        break;
+                    }
+                }
+            }
+            // Skip rest of line (spaces and newline)
+            if (fgets(lineBuffer, sizeof(lineBuffer), file) == NULL) {
+                fprintf(stderr, "Error reading false branch line terminator\n");
                 break;
             }
         }
         
-        // NOTE: IF and CONVERGE nodes should NOT set their owningIfBlock to themselves
-        // They maintain owningIfBlock = -1 (or parent IF index if nested)
-        // Only branch nodes inside the IF block have owningIfBlock set
+        // Update IF and CONVERGE nodes' owningIfBlock and branchColumn
+        // For nested IFs, they should be owned by their parent
+        if (ifBlocks[i].ifNodeIndex >= 0 && ifBlocks[i].ifNodeIndex < nodeCount) {
+            if (ifBlocks[i].parentIfIndex >= 0) {
+                // Nested IF: owned by parent
+                nodes[ifBlocks[i].ifNodeIndex].owningIfBlock = ifBlocks[i].parentIfIndex;
+            } else {
+                // Top-level IF: not owned by any IF
+                nodes[ifBlocks[i].ifNodeIndex].owningIfBlock = -1;
+            }
+            nodes[ifBlocks[i].ifNodeIndex].branchColumn = ifBlocks[i].branchColumn;
+        }
+        
+        if (ifBlocks[i].convergeNodeIndex >= 0 && ifBlocks[i].convergeNodeIndex < nodeCount) {
+            if (ifBlocks[i].parentIfIndex >= 0) {
+                // Nested IF convergence: owned by parent
+                nodes[ifBlocks[i].convergeNodeIndex].owningIfBlock = ifBlocks[i].parentIfIndex;
+            } else {
+                // Top-level IF convergence: not owned by any IF
+                nodes[ifBlocks[i].convergeNodeIndex].owningIfBlock = -1;
+            }
+            nodes[ifBlocks[i].convergeNodeIndex].branchColumn = ifBlocks[i].branchColumn;
+        }
         
         // Update ownership and branch column for all branch nodes
         for (int j = 0; j < ifBlocks[i].trueBranchCount; j++) {
             int nodeIdx = ifBlocks[i].trueBranchNodes[j];
-            if (nodeIdx < nodeCount) {
+            if (nodeIdx >= 0 && nodeIdx < nodeCount) {
                 nodes[nodeIdx].owningIfBlock = i;
                 // True branch is left: branchColumn = ifBlock's branchColumn - 2
+                int oldBranchCol = nodes[nodeIdx].branchColumn;
                 nodes[nodeIdx].branchColumn = ifBlocks[i].branchColumn - 2;
             }
         }
         
         for (int j = 0; j < ifBlocks[i].falseBranchCount; j++) {
             int nodeIdx = ifBlocks[i].falseBranchNodes[j];
-            if (nodeIdx < nodeCount) {
+            if (nodeIdx >= 0 && nodeIdx < nodeCount) {
                 nodes[nodeIdx].owningIfBlock = i;
-                // False branch is right: branchColumn = ifBlock's branchColumn + 2
-                nodes[nodeIdx].branchColumn = ifBlocks[i].branchColumn + 2;
+                // False branch is right: branchColumn calculation matches creation logic
+                int falseBranchCol = ifBlocks[i].branchColumn + 2;
+                if (falseBranchCol <= 0) {
+                    falseBranchCol = abs(ifBlocks[i].branchColumn) + 2;
+                }
+                int oldBranchCol = nodes[nodeIdx].branchColumn;
+                nodes[nodeIdx].branchColumn = falseBranchCol;
+            }
+        }
+    }
+    
+    // After loading all IF blocks, verify and correct branchColumn for nested IFs
+    // Check which branch array of the parent each nested IF is actually in
+    for (int i = 0; i < ifBlockCount; i++) {
+        if (ifBlocks[i].parentIfIndex >= 0 && ifBlocks[i].parentIfIndex < ifBlockCount) {
+            int parentIdx = ifBlocks[i].parentIfIndex;
+            int ifNodeIdx = ifBlocks[i].ifNodeIndex;
+            
+            if (ifNodeIdx >= 0 && ifNodeIdx < nodeCount) {
+                // Check if this IF node is in the parent's true branch array
+                bool inTrueBranch = false;
+                for (int j = 0; j < ifBlocks[parentIdx].trueBranchCount; j++) {
+                    if (ifBlocks[parentIdx].trueBranchNodes[j] == ifNodeIdx) {
+                        inTrueBranch = true;
+                        break;
+                    }
+                }
+                
+                // Check if this IF node is in the parent's false branch array
+                bool inFalseBranch = false;
+                for (int j = 0; j < ifBlocks[parentIdx].falseBranchCount; j++) {
+                    if (ifBlocks[parentIdx].falseBranchNodes[j] == ifNodeIdx) {
+                        inFalseBranch = true;
+                        break;
+                    }
+                }
+                
+                // Correct branchColumn based on which branch array it's actually in
+                // If the branchColumn is wrong, we also need to swap the true/false branch arrays
+                // because they were saved with the wrong branchColumn
+                // SPECIAL CASE: If the nested IF's branchColumn sign doesn't match which branch it's in,
+                // we need to swap the parent's branch arrays (the file structure is wrong)
+                // NOTE: We should NOT swap based on branch counts alone, because a nested IF can legitimately
+                // have nodes in one branch and be empty in the other (e.g., false->true with empty false->false)
+                bool parentBranchesSwapped = false;
+                if (inTrueBranch && !inFalseBranch && ifBlocks[i].branchColumn > 0) {
+                    // Nested IF is in true branch array but has positive branchColumn - parent branches are swapped
+                    parentBranchesSwapped = true;
+                } else if (inFalseBranch && !inTrueBranch && ifBlocks[i].branchColumn < 0) {
+                    // Nested IF is in false branch array but has negative branchColumn - parent branches are swapped
+                    parentBranchesSwapped = true;
+                }
+                
+                if (parentBranchesSwapped) {
+                    // Swap parent's branch arrays
+                    int tempCount = ifBlocks[parentIdx].trueBranchCount;
+                    ifBlocks[parentIdx].trueBranchCount = ifBlocks[parentIdx].falseBranchCount;
+                    ifBlocks[parentIdx].falseBranchCount = tempCount;
+                    int tempNodes[MAX_NODES];
+                    memcpy(tempNodes, ifBlocks[parentIdx].trueBranchNodes, sizeof(ifBlocks[parentIdx].trueBranchNodes));
+                    memcpy(ifBlocks[parentIdx].trueBranchNodes, ifBlocks[parentIdx].falseBranchNodes, sizeof(ifBlocks[parentIdx].falseBranchNodes));
+                    memcpy(ifBlocks[parentIdx].falseBranchNodes, tempNodes, sizeof(ifBlocks[parentIdx].falseBranchNodes));
+                    // After swapping parent's branches, the nested IF's branchColumn needs to be inverted
+                    // but its own branch arrays should NOT be swapped (they're correct)
+                    // If it was in false branch (positive branchColumn), it's now in true branch (negative)
+                    // If it was in true branch (negative branchColumn), it's now in false branch (positive)
+                    if (ifBlocks[i].branchColumn > 0) {
+                        // Was in false branch, now in true branch - invert to negative
+                        int parentBranchCol = (ifBlocks[parentIdx].ifNodeIndex >= 0 && ifBlocks[parentIdx].ifNodeIndex < nodeCount) 
+                                             ? nodes[ifBlocks[parentIdx].ifNodeIndex].branchColumn : 0;
+                        int correctBranchCol = parentBranchCol - 2;
+                        ifBlocks[i].branchColumn = correctBranchCol;
+                        nodes[ifNodeIdx].branchColumn = correctBranchCol;
+                        if (ifBlocks[i].convergeNodeIndex >= 0 && ifBlocks[i].convergeNodeIndex < nodeCount) {
+                            nodes[ifBlocks[i].convergeNodeIndex].branchColumn = correctBranchCol;
+                        }
+                        inTrueBranch = true;
+                        inFalseBranch = false;
+                    } else if (ifBlocks[i].branchColumn < 0) {
+                        // Was in true branch, now in false branch - invert to positive
+                        int parentBranchCol = (ifBlocks[parentIdx].ifNodeIndex >= 0 && ifBlocks[parentIdx].ifNodeIndex < nodeCount) 
+                                             ? nodes[ifBlocks[parentIdx].ifNodeIndex].branchColumn : 0;
+                        int falseBranchCol = parentBranchCol + 2;
+                        if (falseBranchCol <= 0) {
+                            falseBranchCol = abs(parentBranchCol) + 2;
+                        }
+                        ifBlocks[i].branchColumn = falseBranchCol;
+                        nodes[ifNodeIdx].branchColumn = falseBranchCol;
+                        if (ifBlocks[i].convergeNodeIndex >= 0 && ifBlocks[i].convergeNodeIndex < nodeCount) {
+                            nodes[ifBlocks[i].convergeNodeIndex].branchColumn = falseBranchCol;
+                        }
+                        inTrueBranch = false;
+                        inFalseBranch = true;
+                    }
+                    // DO NOT swap the nested IF's own branch arrays - they're correct
+                    // Skip the rest of the correction logic since we've already fixed it
+                    continue;
+                }
+                
+                if (inTrueBranch && !inFalseBranch) {
+                    // In true branch - branchColumn should be negative
+                    int parentBranchCol = (ifBlocks[parentIdx].ifNodeIndex >= 0 && ifBlocks[parentIdx].ifNodeIndex < nodeCount) 
+                                         ? nodes[ifBlocks[parentIdx].ifNodeIndex].branchColumn : 0;
+                    int correctBranchCol = parentBranchCol - 2;
+                    // Also check if the sign is wrong - if current is positive but should be negative, or vice versa
+                    bool needsCorrection = (ifBlocks[i].branchColumn != correctBranchCol) ||
+                                          (ifBlocks[i].branchColumn > 0 && correctBranchCol < 0) ||
+                                          (ifBlocks[i].branchColumn < 0 && correctBranchCol > 0);
+                    if (needsCorrection) {
+                        // Swap true and false branch arrays because they were saved with wrong branchColumn
+                        int tempCount = ifBlocks[i].trueBranchCount;
+                        ifBlocks[i].trueBranchCount = ifBlocks[i].falseBranchCount;
+                        ifBlocks[i].falseBranchCount = tempCount;
+                        int tempNodes[MAX_NODES];
+                        memcpy(tempNodes, ifBlocks[i].trueBranchNodes, sizeof(ifBlocks[i].trueBranchNodes));
+                        memcpy(ifBlocks[i].trueBranchNodes, ifBlocks[i].falseBranchNodes, sizeof(ifBlocks[i].falseBranchNodes));
+                        memcpy(ifBlocks[i].falseBranchNodes, tempNodes, sizeof(ifBlocks[i].falseBranchNodes));
+                        
+                        ifBlocks[i].branchColumn = correctBranchCol;
+                        nodes[ifNodeIdx].branchColumn = correctBranchCol;
+                        if (ifBlocks[i].convergeNodeIndex >= 0 && ifBlocks[i].convergeNodeIndex < nodeCount) {
+                            nodes[ifBlocks[i].convergeNodeIndex].branchColumn = correctBranchCol;
+                        }
+                    }
+                } else if (inFalseBranch && !inTrueBranch) {
+                    // In false branch - branchColumn should be positive
+                    int parentBranchCol = (ifBlocks[parentIdx].ifNodeIndex >= 0 && ifBlocks[parentIdx].ifNodeIndex < nodeCount) 
+                                         ? nodes[ifBlocks[parentIdx].ifNodeIndex].branchColumn : 0;
+                    int falseBranchCol = parentBranchCol + 2;
+                    if (falseBranchCol <= 0) {
+                        falseBranchCol = abs(parentBranchCol) + 2;
+                    }
+                    // Also check if the sign is wrong - if current is negative but should be positive, or vice versa
+                    bool needsCorrection = (ifBlocks[i].branchColumn != falseBranchCol) ||
+                                          (ifBlocks[i].branchColumn < 0 && falseBranchCol > 0) ||
+                                          (ifBlocks[i].branchColumn > 0 && falseBranchCol < 0);
+                    if (needsCorrection) {
+                        // Swap true and false branch arrays because they were saved with wrong branchColumn
+                        int tempCount = ifBlocks[i].trueBranchCount;
+                        ifBlocks[i].trueBranchCount = ifBlocks[i].falseBranchCount;
+                        ifBlocks[i].falseBranchCount = tempCount;
+                        int tempNodes[MAX_NODES];
+                        memcpy(tempNodes, ifBlocks[i].trueBranchNodes, sizeof(ifBlocks[i].trueBranchNodes));
+                        memcpy(ifBlocks[i].trueBranchNodes, ifBlocks[i].falseBranchNodes, sizeof(ifBlocks[i].falseBranchNodes));
+                        memcpy(ifBlocks[i].falseBranchNodes, tempNodes, sizeof(ifBlocks[i].falseBranchNodes));
+                        
+                        ifBlocks[i].branchColumn = falseBranchCol;
+                        nodes[ifNodeIdx].branchColumn = falseBranchCol;
+                        if (ifBlocks[i].convergeNodeIndex >= 0 && ifBlocks[i].convergeNodeIndex < nodeCount) {
+                            nodes[ifBlocks[i].convergeNodeIndex].branchColumn = falseBranchCol;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // After verifying branchColumns, update branch node branchColumns again
+    for (int i = 0; i < ifBlockCount; i++) {
+        // Update true branch nodes
+        for (int j = 0; j < ifBlocks[i].trueBranchCount; j++) {
+            int nodeIdx = ifBlocks[i].trueBranchNodes[j];
+            if (nodeIdx >= 0 && nodeIdx < nodeCount) {
+                nodes[nodeIdx].branchColumn = ifBlocks[i].branchColumn - 2;
+            }
+        }
+        
+        // Update false branch nodes
+        for (int j = 0; j < ifBlocks[i].falseBranchCount; j++) {
+            int nodeIdx = ifBlocks[i].falseBranchNodes[j];
+            if (nodeIdx >= 0 && nodeIdx < nodeCount) {
+                int falseBranchCol = ifBlocks[i].branchColumn + 2;
+                if (falseBranchCol <= 0) {
+                    falseBranchCol = abs(ifBlocks[i].branchColumn) + 2;
+                }
+                nodes[nodeIdx].branchColumn = falseBranchCol;
+            }
+        }
+    }
+    
+    // After loading all IF blocks, update branch positions and reposition convergence points
+    // This ensures nested IFs are properly positioned
+    update_all_branch_positions();
+    
+    // Reposition all convergence points to ensure they're in the correct positions
+    for (int i = 0; i < ifBlockCount; i++) {
+        reposition_convergence_point(i, false);  // Don't push nodes below when loading
+    }
+    
+    // Fix nodes below nested IF convergence points
+    for (int i = 0; i < ifBlockCount; i++) {
+        if (ifBlocks[i].parentIfIndex >= 0 && ifBlocks[i].convergeNodeIndex >= 0 && 
+            ifBlocks[i].convergeNodeIndex < nodeCount) {
+            double convergeY = nodes[ifBlocks[i].convergeNodeIndex].y;
+            int parentIfIdx = ifBlocks[i].parentIfIndex;
+            
+            // Find all nodes below this convergence point
+            for (int j = 0; j < nodeCount; j++) {
+                if (nodes[j].y < convergeY && j != ifBlocks[i].convergeNodeIndex) {
+                    // Check if this node is NOT part of the nested IF (not in branch arrays)
+                    bool isInNestedIfBranch = false;
+                    for (int k = 0; k < ifBlocks[i].trueBranchCount; k++) {
+                        if (ifBlocks[i].trueBranchNodes[k] == j) {
+                            isInNestedIfBranch = true;
+                            break;
+                        }
+                    }
+                    if (!isInNestedIfBranch) {
+                        for (int k = 0; k < ifBlocks[i].falseBranchCount; k++) {
+                            if (ifBlocks[i].falseBranchNodes[k] == j) {
+                                isInNestedIfBranch = true;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // Also check if it's the nested IF node itself
+                    if (j == ifBlocks[i].ifNodeIndex) {
+                        isInNestedIfBranch = true;
+                    }
+                    
+                    if (!isInNestedIfBranch) {
+                        // This node is below the nested IF convergence but not part of it
+                        // It should be in the parent's context or main branch
+                        int oldOwningIfBlock = nodes[j].owningIfBlock;
+                        int oldBranchColumn = nodes[j].branchColumn;
+                        
+                        // Set to parent's context
+                        if (parentIfIdx >= 0 && parentIfIdx < ifBlockCount) {
+                            nodes[j].owningIfBlock = parentIfIdx;
+                            nodes[j].branchColumn = ifBlocks[parentIfIdx].branchColumn;
+                        } else {
+                            // Top-level: main branch
+                            nodes[j].owningIfBlock = -1;
+                            nodes[j].branchColumn = 0;
+                        }
+                    }
+                }
             }
         }
     }
@@ -3528,16 +3860,6 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
                         if (isAboveIF || isAboveConverge) {
                             targetRegularIfBlock = j;
                             targetRegularIfConvergeIdx = convergeIdx;
-                            // #region agent log
-                            {
-                                FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-                                if (f) {
-                                    fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"chained-if-fix\",\"hypothesisId\":\"H8\",\"location\":\"main.c:insert_node_in_connection:detect_regular_if\",\"message\":\"Detected regular IF when inserting above\",\"data\":{\"targetRegularIfBlock\":%d,\"targetRegularIfConvergeIdx\":%d,\"ifNodeY\":%.3f,\"convergeY\":%.3f,\"fromY\":%.3f,\"toY\":%.3f,\"isAboveIF\":%d,\"isAboveConverge\":%d},\"timestamp\":%ld}\n",
-                                        j, convergeIdx, nodes[ifNodeIdx].y, (convergeIdx >= 0 && convergeIdx < nodeCount) ? nodes[convergeIdx].y : -999.0, from->y, to->y, isAboveIF, isAboveConverge, time(NULL));
-                                    fclose(f);
-                                }
-                            }
-                            // #endregion
                             break;
                         }
                     }
@@ -3545,17 +3867,6 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
             }
         }
     }
-    
-    // #region agent log
-    {
-        FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-        if (f) {
-            fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"insert-after-if\",\"hypothesisId\":\"H1,H2,H3,H4,H5\",\"location\":\"main.c:insert_node_in_connection:detection\",\"message\":\"Insert detection\",\"data\":{\"fromType\":%d,\"toType\":%d,\"fromY\":%.3f,\"toY\":%.3f,\"originalToY\":%.3f,\"insertingAboveNestedIF\":%d,\"targetNestedIfBlock\":%d,\"targetRegularIfBlock\":%d,\"fromOwningIfBlock\":%d,\"toOwningIfBlock\":%d},\"timestamp\":%ld}\n",
-                from->type, to->type, from->y, to->y, originalToY, insertingAboveNestedIF, targetNestedIfBlock, targetRegularIfBlock, from->owningIfBlock, to->owningIfBlock, time(NULL));
-            fclose(f);
-        }
-    }
-    // #endregion
     
     // Store original convergence Y positions for all IF blocks that will be pushed
     // (we need this before the loop starts, since convergence points may be pushed during the loop)
@@ -3568,17 +3879,6 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
         if (nodes[i].y <= originalToY && i != newNodeIndex) {
             // Determine if this node should be pushed
             bool shouldPush = false;
-            
-            // #region agent log
-            {
-                FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-                if (f) {
-                    fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"insert-after-if\",\"hypothesisId\":\"H1,H2,H3\",\"location\":\"main.c:insert_node_in_connection:first_pass_check\",\"message\":\"First pass checking node\",\"data\":{\"nodeIndex\":%d,\"nodeType\":%d,\"nodeY\":%.3f,\"nodeBranchColumn\":%d,\"nodeOwningIfBlock\":%d,\"originalToY\":%.3f,\"fromType\":%d,\"toType\":%d,\"isToNode\":%d},\"timestamp\":%ld}\n",
-                        i, nodes[i].type, nodes[i].y, nodes[i].branchColumn, nodes[i].owningIfBlock, originalToY, from->type, to->type, (i == oldConn.toNode), time(NULL));
-                    fclose(f);
-                }
-            }
-            // #endregion
             
             // SPECIAL CASE: When inserting above a regular IF (not nested), push that IF and ALL its contents
             if (targetRegularIfBlock >= 0) {
@@ -3714,17 +4014,6 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
                 if (from->type == NODE_IF && i == oldConn.toNode) {
                     // This is the "to" node - always push it when inserting right after an IF
                     shouldPush = true;
-                    
-                    // #region agent log
-                    {
-                        FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-                        if (f) {
-                            fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"insert-after-if-fix\",\"hypothesisId\":\"H1\",\"location\":\"main.c:insert_node_in_connection:push_to_node\",\"message\":\"Pushing to node (insert after IF)\",\"data\":{\"nodeIndex\":%d,\"nodeType\":%d,\"nodeY\":%.3f,\"fromType\":%d,\"toType\":%d},\"timestamp\":%ld}\n",
-                                i, nodes[i].type, nodes[i].y, from->type, to->type, time(NULL));
-                            fclose(f);
-                        }
-                    }
-                    // #endregion
                 } else if (from->type == NODE_IF && nodes[i].y <= originalToY) {
                     // This is a node at or below the "to" node - when inserting directly after an IF,
                     // we need to push all nodes at or below the "to" node that are in the same context
@@ -3758,17 +4047,6 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
                     
                     if (shouldPushThisNode) {
                         shouldPush = true;
-                        
-                        // #region agent log
-                        {
-                            FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-                            if (f) {
-                                fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"insert-after-if-fix\",\"hypothesisId\":\"H2\",\"location\":\"main.c:insert_node_in_connection:push_below_to\",\"message\":\"Pushing node below to node\",\"data\":{\"nodeIndex\":%d,\"nodeType\":%d,\"nodeY\":%.3f,\"nodeBranchColumn\":%d,\"toBranchColumn\":%d,\"toType\":%d,\"nodeOwningIfBlock\":%d,\"toOwningIfBlock\":%d},\"timestamp\":%ld}\n",
-                                    i, nodes[i].type, nodes[i].y, nodes[i].branchColumn, to->branchColumn, to->type, nodes[i].owningIfBlock, to->owningIfBlock, time(NULL));
-                                fclose(f);
-                            }
-                        }
-                        // #endregion
                     }
                 } else {
                     // Case 1: Both in main branch (0) AND same IF block ownership (or both -1)
@@ -3776,17 +4054,6 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
                     // IMPORTANT: Use the actual node's owningIfBlock (which may have been updated when added to branch array)
                     // instead of just newNodeOwningIfBlock variable, to handle cases where the node was added to a branch
                     int actualNewNodeOwningIfBlock = nodes[newNodeIndex].owningIfBlock;
-                    
-                    // #region agent log
-                    {
-                        FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-                        if (f) {
-                            fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"insert-after-if-fix\",\"hypothesisId\":\"H3\",\"location\":\"main.c:insert_node_in_connection:standard_push_check\",\"message\":\"Standard push logic check\",\"data\":{\"nodeIndex\":%d,\"targetBranchColumn\":%d,\"nodeBranchColumn\":%d,\"actualNewNodeOwningIfBlock\":%d,\"nodeOwningIfBlock\":%d,\"fromType\":%d,\"isToNode\":%d},\"timestamp\":%ld}\n",
-                                i, targetBranchColumn, nodes[i].branchColumn, actualNewNodeOwningIfBlock, nodes[i].owningIfBlock, from->type, (i == oldConn.toNode), time(NULL));
-                            fclose(f);
-                        }
-                    }
-                    // #endregion
                     
                     if (targetBranchColumn == 0 && nodes[i].branchColumn == 0) {
                         // Only push if they're in the same IF block (or both not in any IF block)
@@ -3800,17 +4067,6 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
                     }
                 }
             }
-            
-            // #region agent log
-            {
-                FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-                if (f) {
-                    fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"insert-after-if-fix\",\"hypothesisId\":\"H1,H2,H3\",\"location\":\"main.c:insert_node_in_connection:should_push_final\",\"message\":\"Final shouldPush decision\",\"data\":{\"nodeIndex\":%d,\"shouldPush\":%d,\"isToNode\":%d,\"fromType\":%d},\"timestamp\":%ld}\n",
-                        i, shouldPush, (i == oldConn.toNode), from->type, time(NULL));
-                    fclose(f);
-                }
-            }
-            // #endregion
             
             // If this node should be pushed AND it's an IF block, track it for branch node pushing
             if (shouldPush && nodes[i].type == NODE_IF) {
@@ -3918,17 +4174,6 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
                                 // Only push if the nested IF is in the same branch as where we're adding
                                 if (nestedIfBranchColumn != targetBranchColumn) {
                                     shouldPushThisNestedIF = false;
-                                    
-                                    // #region agent log
-                                    {
-                                        FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-                                        if (f) {
-                                            fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"nested-if-branch-fix\",\"hypothesisId\":\"H1\",\"location\":\"main.c:insert_node_in_connection:skip_nested_if_different_branch\",\"message\":\"Skipping nested IF in different parent branch\",\"data\":{\"ifBlockIdx\":%d,\"nestedIfBranchColumn\":%d,\"targetBranchColumn\":%d,\"nestedIfParentIdx\":%d},\"timestamp\":%ld}\n",
-                                                ifBlockIdx, nestedIfBranchColumn, targetBranchColumn, nestedIfParentIdx, time(NULL));
-                                            fclose(f);
-                                        }
-                                    }
-                                    // #endregion
                                 }
                             }
                         }
@@ -3948,18 +4193,6 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
                         for (int j = 0; j < ifBlocks[ifBlockIdx].trueBranchCount; j++) {
                             if (ifBlocks[ifBlockIdx].trueBranchNodes[j] == i) {
                                 shouldPush = true;
-                                
-                                // #region agent log
-                                {
-                                    FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-                                    if (f) {
-                                        fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"insert-after-if-fix\",\"hypothesisId\":\"H4\",\"location\":\"main.c:insert_node_in_connection:push_nested_if_branch\",\"message\":\"Pushing nested IF branch node (true)\",\"data\":{\"nodeIndex\":%d,\"ifBlockIdx\":%d,\"branchType\":\"true\"},\"timestamp\":%ld}\n",
-                                            i, ifBlockIdx, time(NULL));
-                                        fclose(f);
-                                    }
-                                }
-                                // #endregion
-                                
                                 break;
                             }
                         }
@@ -3969,18 +4202,6 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
                         for (int j = 0; j < ifBlocks[ifBlockIdx].falseBranchCount; j++) {
                             if (ifBlocks[ifBlockIdx].falseBranchNodes[j] == i) {
                                 shouldPush = true;
-                                
-                                // #region agent log
-                                {
-                                    FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-                                    if (f) {
-                                        fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"insert-after-if-fix\",\"hypothesisId\":\"H4\",\"location\":\"main.c:insert_node_in_connection:push_nested_if_branch\",\"message\":\"Pushing nested IF branch node (false)\",\"data\":{\"nodeIndex\":%d,\"ifBlockIdx\":%d,\"branchType\":\"false\"},\"timestamp\":%ld}\n",
-                                            i, ifBlockIdx, time(NULL));
-                                        fclose(f);
-                                    }
-                                }
-                                // #endregion
-                                
                                 break;
                             }
                         }
@@ -3989,18 +4210,6 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
                         // Check if this node is the convergence point
                         if (convergeIdx == i) {
                             shouldPush = true;
-                            
-                            // #region agent log
-                            {
-                                FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-                                if (f) {
-                                    fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"insert-after-if-fix\",\"hypothesisId\":\"H4\",\"location\":\"main.c:insert_node_in_connection:push_nested_if_converge\",\"message\":\"Pushing nested IF convergence point\",\"data\":{\"nodeIndex\":%d,\"ifBlockIdx\":%d},\"timestamp\":%ld}\n",
-                                        i, ifBlockIdx, time(NULL));
-                                    fclose(f);
-                                }
-                            }
-                            // #endregion
-                            
                             break;
                         }
                         
@@ -4048,31 +4257,8 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
                                                        nodes[i].owningIfBlock == nodes[nestedIfNodeIdx].owningIfBlock);
                             }
                             
-                            // #region agent log
-                            {
-                                FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-                                if (f) {
-                                    fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"insert-after-if-fix\",\"hypothesisId\":\"H4\",\"location\":\"main.c:insert_node_in_connection:check_below_converge\",\"message\":\"Checking if node below convergence should be pushed\",\"data\":{\"nodeIndex\":%d,\"ifBlockIdx\":%d,\"convergeIdx\":%d,\"nodeY\":%.3f,\"convergeY\":%.3f,\"nodeBranchColumn\":%d,\"nodeOwningIfBlock\":%d,\"ifParentIdx\":%d,\"isMainBranch\":%d,\"isInSameParentBranch\":%d,\"isInNestedIfBranch\":%d,\"isFromDifferentNestedIF\":%d,\"belongsToDifferentIF\":%d},\"timestamp\":%ld}\n",
-                                            i, ifBlockIdx, convergeIdx, nodes[i].y, nodes[convergeIdx].y, nodes[i].branchColumn, nodes[i].owningIfBlock, ifParentIdx, isMainBranch, isInSameParentBranch, isInNestedIfBranch, isFromDifferentNestedIF, belongsToDifferentIF, time(NULL));
-                                    fclose(f);
-                                }
-                            }
-                            // #endregion
-                            
                             if ((isMainBranch || isInSameParentBranch || isInNestedIfBranch) && !isFromDifferentNestedIF && !belongsToDifferentIF) {
                                 shouldPush = true;
-                                
-                                // #region agent log
-                                {
-                                    FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-                                    if (f) {
-                                        fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"insert-after-if-fix\",\"hypothesisId\":\"H4\",\"location\":\"main.c:insert_node_in_connection:push_nested_if_below\",\"message\":\"Pushing node below nested IF convergence\",\"data\":{\"nodeIndex\":%d,\"ifBlockIdx\":%d,\"convergeIdx\":%d},\"timestamp\":%ld}\n",
-                                                i, ifBlockIdx, convergeIdx, time(NULL));
-                                        fclose(f);
-                                    }
-                                }
-                                // #endregion
-                                
                                 break;
                             }
                         }
@@ -4103,27 +4289,6 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
                     
                     if (isMainBranch && !belongsToDifferentIF && !isInBranch) {
                         shouldPush = true;
-                        // #region agent log
-                        {
-                            FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-                            if (f) {
-                                fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"chained-if-fix\",\"hypothesisId\":\"H8\",\"location\":\"main.c:insert_node_in_connection:push_below_regular_if_converge\",\"message\":\"Pushing node below regular IF convergence\",\"data\":{\"nodeIndex\":%d,\"targetRegularIfBlock\":%d,\"targetRegularIfConvergeIdx\":%d,\"nodeY\":%.3f,\"convergeY\":%.3f,\"nodeBranchColumn\":%d,\"nodeOwningIfBlock\":%d,\"isMainBranch\":%d,\"belongsToDifferentIF\":%d,\"isInBranch\":%d},\"timestamp\":%ld}\n",
-                                    i, targetRegularIfBlock, targetRegularIfConvergeIdx, nodes[i].y, nodes[targetRegularIfConvergeIdx].y, nodes[i].branchColumn, nodes[i].owningIfBlock, isMainBranch, belongsToDifferentIF, isInBranch, time(NULL));
-                                fclose(f);
-                            }
-                        }
-                        // #endregion
-                    } else {
-                        // #region agent log
-                        {
-                            FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-                            if (f) {
-                                fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"chained-if-fix\",\"hypothesisId\":\"H8\",\"location\":\"main.c:insert_node_in_connection:skip_below_regular_if_converge\",\"message\":\"Skipping node below regular IF convergence\",\"data\":{\"nodeIndex\":%d,\"targetRegularIfBlock\":%d,\"targetRegularIfConvergeIdx\":%d,\"nodeY\":%.3f,\"convergeY\":%.3f,\"nodeBranchColumn\":%d,\"nodeOwningIfBlock\":%d,\"isMainBranch\":%d,\"belongsToDifferentIF\":%d,\"isInBranch\":%d},\"timestamp\":%ld}\n",
-                                    i, targetRegularIfBlock, targetRegularIfConvergeIdx, nodes[i].y, nodes[targetRegularIfConvergeIdx].y, nodes[i].branchColumn, nodes[i].owningIfBlock, isMainBranch, belongsToDifferentIF, isInBranch, time(NULL));
-                                fclose(f);
-                            }
-                        }
-                        // #endregion
                     }
                 }
             }
@@ -4134,36 +4299,14 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
                 continue;
             }
             
-            // #region agent log
-            {
-                double oldY = nodes[i].y;
-                nodes[i].y -= gridSpacing;
-                nodes[i].y = snap_to_grid_y(nodes[i].y);
-                FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-                if (f) {
-                    fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"insert-after-if\",\"hypothesisId\":\"H1,H2,H3\",\"location\":\"main.c:insert_node_in_connection:first_pass_push\",\"message\":\"First pass pushing node\",\"data\":{\"nodeIndex\":%d,\"nodeType\":%d,\"oldY\":%.3f,\"newY\":%.3f,\"nodeBranchColumn\":%d,\"nodeOwningIfBlock\":%d,\"isToNode\":%d},\"timestamp\":%ld}\n",
-                        i, nodes[i].type, oldY, nodes[i].y, nodes[i].branchColumn, nodes[i].owningIfBlock, (i == oldConn.toNode), time(NULL));
-                    fclose(f);
-                }
-            }
-            // #endregion
+            nodes[i].y -= gridSpacing;
+            nodes[i].y = snap_to_grid_y(nodes[i].y);
         }
     }
     
     // Second pass: Push all branch nodes of IF blocks that were pushed
     // BUT: Only push branch nodes if the IF block is in the same branch we're adding to
     // This prevents pushing nested IF branch nodes when adding to parent IF branches
-    
-    // #region agent log
-    {
-        FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-        if (f) {
-            fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"insert-above-if\",\"hypothesisId\":\"H2,H5\",\"location\":\"main.c:insert_node_in_connection:second_pass_start\",\"message\":\"Second pass starting\",\"data\":{\"pushedIfBlockCount\":%d,\"insertingAboveNestedIF\":%d,\"targetNestedIfBlock\":%d,\"targetBranchColumn\":%d},\"timestamp\":%ld}\n",
-                pushedIfBlockCount, insertingAboveNestedIF, targetNestedIfBlock, targetBranchColumn, time(NULL));
-            fclose(f);
-        }
-    }
-    // #endregion
     
     for (int i = 0; i < pushedIfBlockCount; i++) {
         int ifBlockIdx = pushedIfBlocks[i];
@@ -4180,17 +4323,6 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
         // EXCEPTION: When inserting above a nested IF, always push all branch nodes of that nested IF
         bool shouldPushBranchNodes = true;
         bool isTargetNestedIF = (insertingAboveNestedIF && ifBlockIdx == targetNestedIfBlock);
-        
-        // #region agent log
-        {
-            FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-            if (f) {
-                fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"insert-above-if\",\"hypothesisId\":\"H2,H5\",\"location\":\"main.c:insert_node_in_connection:second_pass_if\",\"message\":\"Second pass processing IF\",\"data\":{\"ifBlockIdx\":%d,\"isTargetNestedIF\":%d,\"shouldPushBranchNodes\":%d,\"targetBranchColumn\":%d},\"timestamp\":%ld}\n",
-                    ifBlockIdx, isTargetNestedIF, shouldPushBranchNodes, targetBranchColumn, time(NULL));
-                fclose(f);
-            }
-        }
-        // #endregion
         
         if (!isTargetNestedIF && targetBranchColumn != 0 && ifBlockIdx >= 0 && ifBlockIdx < ifBlockCount) {
             int ifNodeIdx = ifBlocks[ifBlockIdx].ifNodeIndex;
@@ -4247,20 +4379,6 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
                 // Otherwise, only push branch nodes matching targetBranchColumn
                 bool pushAllBranches = (insertingAboveNestedIF && ifBlockIdx == targetNestedIfBlock);
                 
-                // #region agent log
-                {
-                    FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-                    if (f) {
-                        fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"insert-above-if\",\"hypothesisId\":\"H2,H5,H6\",\"location\":\"main.c:insert_node_in_connection:before_branch_push\",\"message\":\"Before pushing branch nodes\",\"data\":{\"ifBlockIdx\":%d,\"pushAllBranches\":%d,\"targetBranchColumn\":%d,\"trueBranchCount\":%d,\"falseBranchCount\":%d,\"skipBranchPush\":%d},\"timestamp\":%ld}\n",
-                            ifBlockIdx, pushAllBranches, targetBranchColumn, 
-                            (ifBlockIdx >= 0 && ifBlockIdx < ifBlockCount) ? ifBlocks[ifBlockIdx].trueBranchCount : 0,
-                            (ifBlockIdx >= 0 && ifBlockIdx < ifBlockCount) ? ifBlocks[ifBlockIdx].falseBranchCount : 0,
-                            skipBranchPush, time(NULL));
-                        fclose(f);
-                    }
-                }
-                // #endregion
-                
                 for (int j = 0; j < nodeCount; j++) {
                     if (j != newNodeIndex && nodes[j].owningIfBlock == ifBlockIdx && nodes[j].branchColumn != 0) {
                         
@@ -4270,32 +4388,10 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
                             continue;  // Skip this branch node - it's in a different branch
                         }
                         
-                        // #region agent log
-                        {
-                            double oldY = nodes[j].y;
-                            nodes[j].y -= gridSpacing;
-                            nodes[j].y = snap_to_grid_y(nodes[j].y);
-                            FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-                            if (f) {
-                                fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"insert-above-if\",\"hypothesisId\":\"H2,H5,H6\",\"location\":\"main.c:insert_node_in_connection:branch_push\",\"message\":\"Pushing branch node\",\"data\":{\"nodeIndex\":%d,\"nodeType\":%d,\"oldY\":%.3f,\"newY\":%.3f,\"nodeBranchColumn\":%d,\"ifBlockIdx\":%d},\"timestamp\":%ld}\n",
-                                    j, nodes[j].type, oldY, nodes[j].y, nodes[j].branchColumn, ifBlockIdx, time(NULL));
-                                fclose(f);
-                            }
-                        }
-                        // #endregion
+                        nodes[j].y -= gridSpacing;
+                        nodes[j].y = snap_to_grid_y(nodes[j].y);
                     }
                 }
-            } else {
-                // #region agent log
-                {
-                    FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-                    if (f) {
-                        fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"insert-above-if\",\"hypothesisId\":\"H2\",\"location\":\"main.c:insert_node_in_connection:skip_branch_push\",\"message\":\"Skipping branch push (already pushed in first pass)\",\"data\":{\"ifBlockIdx\":%d,\"targetNestedIfBlock\":%d},\"timestamp\":%ld}\n",
-                            ifBlockIdx, targetNestedIfBlock, time(NULL));
-                        fclose(f);
-                    }
-                }
-                // #endregion
             }
         }
     }
@@ -4325,29 +4421,7 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
     // IMPORTANT: Only reposition the IF block whose branch we actually added to (relevantIfBlock)
     // Do NOT reposition nested IFs when adding to parent IF branches
     
-    // #region agent log
-    {
-        FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-        if (f) {
-            fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"convergence-reposition-check\",\"hypothesisId\":\"H1\",\"location\":\"main.c:insert_node_in_connection:before_reposition\",\"message\":\"Before repositioning convergence\",\"data\":{\"relevantIfBlock\":%d,\"nodeAddedToBranch\":%d,\"targetBranchColumn\":%d,\"newNodeIndex\":%d,\"newNodeOwningIfBlock\":%d},\"timestamp\":%ld}\n",
-                relevantIfBlock, nodeAddedToBranch, targetBranchColumn, newNodeIndex, newNodeOwningIfBlock, time(NULL));
-            fclose(f);
-        }
-    }
-    // #endregion
-    
     if (relevantIfBlock >= 0 && nodeAddedToBranch) {
-        
-        // #region agent log
-        {
-            FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-            if (f) {
-                fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"convergence-reposition-check\",\"hypothesisId\":\"H1\",\"location\":\"main.c:insert_node_in_connection:repositioning\",\"message\":\"Repositioning convergence point\",\"data\":{\"relevantIfBlock\":%d,\"targetBranchColumn\":%d},\"timestamp\":%ld}\n",
-                    relevantIfBlock, targetBranchColumn, time(NULL));
-                fclose(f);
-            }
-        }
-        // #endregion
         
         reposition_convergence_point(relevantIfBlock, true);
         
@@ -4358,6 +4432,50 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
             if (parentIfIdx >= 0 && parentIfIdx < ifBlockCount) {
                 
                 reposition_convergence_point(parentIfIdx, true);
+                
+                // CRITICAL FIX: After repositioning parent IF, find all sibling nested IFs
+                // and ensure end node is positioned based on the LOWEST convergence point
+                // among all sibling nested IFs (IFs with the same parent) AND the parent IF's convergence
+                double lowestSiblingConvergeY = 999999.0;
+                bool foundSiblingConverge = false;
+                
+                // Check the parent IF's convergence point
+                int parentConvergeIdx = ifBlocks[parentIfIdx].convergeNodeIndex;
+                if (parentConvergeIdx >= 0 && parentConvergeIdx < nodeCount) {
+                    if (nodes[parentConvergeIdx].y < lowestSiblingConvergeY) {
+                        lowestSiblingConvergeY = nodes[parentConvergeIdx].y;
+                        foundSiblingConverge = true;
+                    }
+                }
+                
+                // Check all sibling nested IFs (including the current one)
+                for (int i = 0; i < ifBlockCount; i++) {
+                    if (ifBlocks[i].parentIfIndex == parentIfIdx) {
+                        int siblingConvergeIdx = ifBlocks[i].convergeNodeIndex;
+                        if (siblingConvergeIdx >= 0 && siblingConvergeIdx < nodeCount) {
+                            if (nodes[siblingConvergeIdx].y < lowestSiblingConvergeY) {
+                                lowestSiblingConvergeY = nodes[siblingConvergeIdx].y;
+                                foundSiblingConverge = true;
+                            }
+                        }
+                    }
+                }
+                
+                // If we found sibling convergences, ensure end node is below the lowest one
+                if (foundSiblingConverge) {
+                    // Find end node (should be in main branch, not owned by any IF)
+                    for (int i = 0; i < nodeCount; i++) {
+                        if (nodes[i].type == NODE_END && nodes[i].branchColumn == 0 && nodes[i].owningIfBlock == -1) {
+                            double endNodeY = nodes[i].y;
+                            double requiredEndY = lowestSiblingConvergeY - GRID_CELL_SIZE;
+                            
+                            if (endNodeY > requiredEndY) {  // endNodeY is less negative, so it's above
+                                nodes[i].y = snap_to_grid_y(requiredEndY);
+                            }
+                            break;
+                        }
+                    }
+                }
             }
         }
         
@@ -4391,17 +4509,6 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
     
     connections[connectionCount].fromNode = newNodeIndex;
     connections[connectionCount].toNode = oldConn.toNode;
-    
-    // #region agent log
-    {
-        FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-        if (f) {
-            fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"insert-after-if\",\"hypothesisId\":\"H4\",\"location\":\"main.c:insert_node_in_connection:connection_replace\",\"message\":\"Replacing connections\",\"data\":{\"oldFrom\":%d,\"oldTo\":%d,\"newFrom\":%d,\"newTo\":%d,\"newNodeIndex\":%d,\"connectionCount\":%d},\"timestamp\":%ld}\n",
-                oldConn.fromNode, oldConn.toNode, newNodeIndex, oldConn.toNode, newNodeIndex, connectionCount, time(NULL));
-            fclose(f);
-        }
-    }
-    // #endregion
     
     connectionCount++;
 
@@ -4545,11 +4652,34 @@ void reposition_convergence_point(int ifBlockIndex, bool shouldPushNodesBelow) {
                     foundBranchNode = true;
                 }
                 
-                // If this node is a nested IF, also check its convergence point
+                // If this node is a nested IF, recursively check all nodes in its branches
                 if (nodes[nodeIdx].type == NODE_IF) {
                     // Find the nested IF block index
                     for (int j = 0; j < ifBlockCount; j++) {
                         if (ifBlocks[j].ifNodeIndex == nodeIdx) {
+                            // Check all nodes in the nested IF's true branch
+                            for (int k = 0; k < ifBlocks[j].trueBranchCount; k++) {
+                                int nestedNodeIdx = ifBlocks[j].trueBranchNodes[k];
+                                if (nestedNodeIdx >= 0 && nestedNodeIdx < nodeCount) {
+                                    if (nodes[nestedNodeIdx].y < lowestBranchY) {
+                                        lowestBranchY = nodes[nestedNodeIdx].y;
+                                        lowestNodeIdx = nestedNodeIdx;
+                                        foundBranchNode = true;
+                                    }
+                                }
+                            }
+                            // Check all nodes in the nested IF's false branch
+                            for (int k = 0; k < ifBlocks[j].falseBranchCount; k++) {
+                                int nestedNodeIdx = ifBlocks[j].falseBranchNodes[k];
+                                if (nestedNodeIdx >= 0 && nestedNodeIdx < nodeCount) {
+                                    if (nodes[nestedNodeIdx].y < lowestBranchY) {
+                                        lowestBranchY = nodes[nestedNodeIdx].y;
+                                        lowestNodeIdx = nestedNodeIdx;
+                                        foundBranchNode = true;
+                                    }
+                                }
+                            }
+                            // Also check the nested IF's convergence point
                             int nestedConvergeIdx = ifBlocks[j].convergeNodeIndex;
                             if (nestedConvergeIdx >= 0 && nestedConvergeIdx < nodeCount) {
                                 double nestedConvergeY = nodes[nestedConvergeIdx].y;
@@ -4577,11 +4707,34 @@ void reposition_convergence_point(int ifBlockIndex, bool shouldPushNodesBelow) {
                     foundBranchNode = true;
                 }
                 
-                // If this node is a nested IF, also check its convergence point
+                // If this node is a nested IF, recursively check all nodes in its branches
                 if (nodes[nodeIdx].type == NODE_IF) {
                     // Find the nested IF block index
                     for (int j = 0; j < ifBlockCount; j++) {
                         if (ifBlocks[j].ifNodeIndex == nodeIdx) {
+                            // Check all nodes in the nested IF's true branch
+                            for (int k = 0; k < ifBlocks[j].trueBranchCount; k++) {
+                                int nestedNodeIdx = ifBlocks[j].trueBranchNodes[k];
+                                if (nestedNodeIdx >= 0 && nestedNodeIdx < nodeCount) {
+                                    if (nodes[nestedNodeIdx].y < lowestBranchY) {
+                                        lowestBranchY = nodes[nestedNodeIdx].y;
+                                        lowestNodeIdx = nestedNodeIdx;
+                                        foundBranchNode = true;
+                                    }
+                                }
+                            }
+                            // Check all nodes in the nested IF's false branch
+                            for (int k = 0; k < ifBlocks[j].falseBranchCount; k++) {
+                                int nestedNodeIdx = ifBlocks[j].falseBranchNodes[k];
+                                if (nestedNodeIdx >= 0 && nestedNodeIdx < nodeCount) {
+                                    if (nodes[nestedNodeIdx].y < lowestBranchY) {
+                                        lowestBranchY = nodes[nestedNodeIdx].y;
+                                        lowestNodeIdx = nestedNodeIdx;
+                                        foundBranchNode = true;
+                                    }
+                                }
+                            }
+                            // Also check the nested IF's convergence point
                             int nestedConvergeIdx = ifBlocks[j].convergeNodeIndex;
                             if (nestedConvergeIdx >= 0 && nestedConvergeIdx < nodeCount) {
                                 double nestedConvergeY = nodes[nestedConvergeIdx].y;
@@ -4686,36 +4839,10 @@ void reposition_convergence_point(int ifBlockIndex, bool shouldPushNodesBelow) {
                     }
                 }
                 
-                // #region agent log
-                {
-                    // Only log for end blocks or when debugging specific scenarios
-                    if (nodes[i].type == NODE_END || (nodes[i].type == NODE_END && originalNodeYs[i] < oldConvergeY)) {
-                        FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-                        if (f) {
-                            bool shouldMove = (i != convergeIdx && originalNodeYs[i] < oldConvergeY && (isMainBranch || isInSameParentBranch) && nodes[i].owningIfBlock != ifBlockIndex && !isFromDifferentNestedIF);
-                            fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"end-block-movement\",\"hypothesisId\":\"H1\",\"location\":\"main.c:reposition_convergence_point:check_end_block\",\"message\":\"Checking end block movement\",\"data\":{\"nodeIndex\":%d,\"nodeType\":%d,\"originalNodeY\":%.3f,\"currentNodeY\":%.3f,\"oldConvergeY\":%.3f,\"isMainBranch\":%d,\"isInSameParentBranch\":%d,\"owningIfBlock\":%d,\"ifBlockIndex\":%d,\"isFromDifferentNestedIF\":%d,\"shouldMove\":%d,\"parentIfIdx\":%d,\"currentIfBranchColumn\":%d},\"timestamp\":%ld}\n",
-                                i, nodes[i].type, originalNodeYs[i], nodes[i].y, oldConvergeY, isMainBranch, isInSameParentBranch, nodes[i].owningIfBlock, ifBlockIndex, isFromDifferentNestedIF, shouldMove, parentIfIdx, currentIfBranchColumn, time(NULL));
-                            fclose(f);
-                        }
-                    }
-                }
-                // #endregion
-                
                 if (i != convergeIdx && originalNodeYs[i] < oldConvergeY && (isMainBranch || isInSameParentBranch) && nodes[i].owningIfBlock != ifBlockIndex && !isFromDifferentNestedIF) {
                     
                     double oldNodeY = nodes[i].y;
                     nodes[i].y = snap_to_grid_y(nodes[i].y + deltaY);
-                    
-                    // #region agent log
-                    {
-                        FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-                        if (f) {
-                            fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"end-block-fix\",\"hypothesisId\":\"H9\",\"location\":\"main.c:reposition_convergence_point:move_node\",\"message\":\"Moving node with convergence\",\"data\":{\"nodeIndex\":%d,\"nodeType\":%d,\"oldY\":%.3f,\"newY\":%.3f,\"deltaY\":%.3f,\"ifBlockIndex\":%d,\"oldConvergeY\":%.3f,\"newConvergeY\":%.3f,\"isMainBranch\":%d,\"owningIfBlock\":%d},\"timestamp\":%ld}\n",
-                                i, nodes[i].type, oldNodeY, nodes[i].y, deltaY, ifBlockIndex, oldConvergeY, newConvergeY, isMainBranch, nodes[i].owningIfBlock, time(NULL));
-                            fclose(f);
-                        }
-                    }
-                    // #endregion
                     
                     // If this is an IF node, track it to move its branches
                     if (nodes[i].type == NODE_IF) {
@@ -4753,29 +4880,6 @@ void reposition_convergence_point(int ifBlockIndex, bool shouldPushNodesBelow) {
                     nodes[j].branchColumn == 0 && originalNodeYs[j] < oldConvergeY) {
                     double oldBranchY = nodes[j].y;
                     nodes[j].y = snap_to_grid_y(nodes[j].y + deltaY);
-                    
-                    // #region agent log
-                    {
-                        FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-                        if (f) {
-                            fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"end-block-fix\",\"hypothesisId\":\"H10\",\"location\":\"main.c:reposition_convergence_point:move_branch_node\",\"message\":\"Moving branch node with convergence\",\"data\":{\"nodeIndex\":%d,\"nodeType\":%d,\"oldY\":%.3f,\"newY\":%.3f,\"deltaY\":%.3f,\"ifBlockIndex\":%d,\"oldConvergeY\":%.3f,\"branchColumn\":%d},\"timestamp\":%ld}\n",
-                                j, nodes[j].type, oldBranchY, nodes[j].y, deltaY, ifBlockIndex, oldConvergeY, nodes[j].branchColumn, time(NULL));
-                            fclose(f);
-                        }
-                    }
-                    // #endregion
-                } else if (j != convergeIdx && nodes[j].owningIfBlock == ifBlockIndex && 
-                           nodes[j].branchColumn == 0) {
-                    // #region agent log
-                    {
-                        FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-                        if (f) {
-                            fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"end-block-fix\",\"hypothesisId\":\"H10\",\"location\":\"main.c:reposition_convergence_point:skip_branch_node\",\"message\":\"Skipping branch node (not below convergence)\",\"data\":{\"nodeIndex\":%d,\"nodeType\":%d,\"originalNodeY\":%.3f,\"oldConvergeY\":%.3f,\"ifBlockIndex\":%d,\"branchColumn\":%d},\"timestamp\":%ld}\n",
-                                j, nodes[j].type, originalNodeYs[j], oldConvergeY, ifBlockIndex, nodes[j].branchColumn, time(NULL));
-                            fclose(f);
-                        }
-                    }
-                    // #endregion
                 }
             }
         }
