@@ -3495,31 +3495,49 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
         }
     } else if (to->y < from->y) {
         // 'to' is a regular block - check if there's a regular IF between 'from' and 'to'
+        // OR if there's a regular IF below 'from' that we're inserting above
         for (int j = 0; j < ifBlockCount; j++) {
             int ifNodeIdx = ifBlocks[j].ifNodeIndex;
             if (ifNodeIdx >= 0 && ifNodeIdx < nodeCount) {
-                // If the IF node is below 'from' and at or above 'to', we're inserting above it
-                if (nodes[ifNodeIdx].y < from->y && nodes[ifNodeIdx].y >= to->y) {
-                    // Check if it's a regular IF (not nested) and in the same context as 'from'
-                    if (ifBlocks[j].parentIfIndex < 0) {
-                        bool sameContext = false;
-                        if (from->owningIfBlock < 0 && nodes[ifNodeIdx].owningIfBlock < 0) {
-                            // Both in main branch
+                // If the IF node is below 'from', we might be inserting above it
+                // Check if it's a regular IF (not nested) and in the same context as 'from'
+                if (nodes[ifNodeIdx].y < from->y && ifBlocks[j].parentIfIndex < 0) {
+                    bool sameContext = false;
+                    if (from->owningIfBlock < 0 && nodes[ifNodeIdx].owningIfBlock < 0) {
+                        // Both in main branch
+                        sameContext = true;
+                    } else if (from->owningIfBlock >= 0 && nodes[ifNodeIdx].owningIfBlock >= 0) {
+                        // Check if they're in the same parent IF
+                        int fromParent = (from->owningIfBlock < ifBlockCount) ? 
+                                       ifBlocks[from->owningIfBlock].parentIfIndex : -1;
+                        int ifParent = (nodes[ifNodeIdx].owningIfBlock < ifBlockCount) ? 
+                                      ifBlocks[nodes[ifNodeIdx].owningIfBlock].parentIfIndex : -1;
+                        if (fromParent == ifParent) {
                             sameContext = true;
-                        } else if (from->owningIfBlock >= 0 && nodes[ifNodeIdx].owningIfBlock >= 0) {
-                            // Check if they're in the same parent IF
-                            int fromParent = (from->owningIfBlock < ifBlockCount) ? 
-                                           ifBlocks[from->owningIfBlock].parentIfIndex : -1;
-                            int ifParent = (nodes[ifNodeIdx].owningIfBlock < ifBlockCount) ? 
-                                          ifBlocks[nodes[ifNodeIdx].owningIfBlock].parentIfIndex : -1;
-                            if (fromParent == ifParent) {
-                                sameContext = true;
-                            }
                         }
+                    }
+                    
+                    if (sameContext) {
+                        // Check if 'to' is above or at the IF, or if the IF's convergence is below 'from'
+                        int convergeIdx = ifBlocks[j].convergeNodeIndex;
+                        bool isAboveIF = (to->y >= nodes[ifNodeIdx].y);
+                        bool isAboveConverge = (convergeIdx >= 0 && convergeIdx < nodeCount && 
+                                                to->y >= nodes[convergeIdx].y);
                         
-                        if (sameContext) {
+                        // If we're inserting above the IF or its convergence, we're inserting above it
+                        if (isAboveIF || isAboveConverge) {
                             targetRegularIfBlock = j;
-                            targetRegularIfConvergeIdx = ifBlocks[j].convergeNodeIndex;
+                            targetRegularIfConvergeIdx = convergeIdx;
+                            // #region agent log
+                            {
+                                FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
+                                if (f) {
+                                    fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"insert-above-regular-if\",\"hypothesisId\":\"H7\",\"location\":\"main.c:insert_node_in_connection:detect_regular_if\",\"message\":\"Detected regular IF when inserting above\",\"data\":{\"targetRegularIfBlock\":%d,\"targetRegularIfConvergeIdx\":%d,\"ifNodeY\":%.3f,\"convergeY\":%.3f,\"fromY\":%.3f,\"toY\":%.3f,\"isAboveIF\":%d,\"isAboveConverge\":%d},\"timestamp\":%ld}\n",
+                                        j, convergeIdx, nodes[ifNodeIdx].y, (convergeIdx >= 0 && convergeIdx < nodeCount) ? nodes[convergeIdx].y : -999.0, from->y, to->y, isAboveIF, isAboveConverge, time(NULL));
+                                    fclose(f);
+                                }
+                            }
+                            // #endregion
                             break;
                         }
                     }
@@ -4003,6 +4021,30 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
                     }
                 }
             }
+            
+            // SPECIAL CASE: When inserting above a regular IF, also push nodes below its convergence point
+            if (!shouldPush && targetRegularIfBlock >= 0 && targetRegularIfConvergeIdx >= 0 && 
+                targetRegularIfConvergeIdx < nodeCount) {
+                // Check if this node is below the convergence point
+                if (nodes[i].y < nodes[targetRegularIfConvergeIdx].y) {
+                    // Only push nodes in the main branch (not owned by any IF block)
+                    bool isMainBranch = (nodes[i].branchColumn == 0 && nodes[i].owningIfBlock < 0);
+                    if (isMainBranch) {
+                        shouldPush = true;
+                        // #region agent log
+                        {
+                            FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
+                            if (f) {
+                                fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"insert-above-regular-if\",\"hypothesisId\":\"H7\",\"location\":\"main.c:insert_node_in_connection:push_below_regular_if_converge\",\"message\":\"Pushing node below regular IF convergence\",\"data\":{\"nodeIndex\":%d,\"targetRegularIfBlock\":%d,\"targetRegularIfConvergeIdx\":%d,\"nodeY\":%.3f,\"convergeY\":%.3f},\"timestamp\":%ld}\n",
+                                    i, targetRegularIfBlock, targetRegularIfConvergeIdx, nodes[i].y, nodes[targetRegularIfConvergeIdx].y, time(NULL));
+                                fclose(f);
+                            }
+                        }
+                        // #endregion
+                    }
+                }
+            }
+            
             // Don't push nodes in different branches
             
             if (!shouldPush) {
