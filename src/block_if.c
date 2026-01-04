@@ -1,6 +1,7 @@
 #include <GLFW/glfw3.h>
 #include <stdio.h>
 #include <math.h>
+#include <string.h>
 #include "block_if.h"
 #include "text_renderer.h"
 
@@ -82,22 +83,28 @@ void draw_block_if(const struct FlowNode *n) {
     // Draw "True" label on the left side
     float fontSize = n->height * 0.25f;
     float trueLabelX = n->x - halfW - 0.15f;  // To the left of left connector
-    float trueLabelY = n->y;
+    float trueLabelY = n->y + 0.15f;  // Moved up a bit
     draw_text(trueLabelX, trueLabelY, "True", fontSize, 0.0f, 0.6f, 0.0f);  // Green text
     
     // Draw "False" label on the right side
     float falseLabelX = n->x + halfW + 0.05f;  // To the right of right connector
-    float falseLabelY = n->y;
+    float falseLabelY = n->y + 0.15f;  // Moved up a bit
     draw_text(falseLabelX, falseLabelY, "False", fontSize, 0.8f, 0.0f, 0.0f);  // Red text
     
-    // Draw condition text centered in the diamond
+    // Draw condition text - inside diamond if short, below if long
     if (n->value[0] != '\0') {
         float condFontSize = n->height * 0.2f;
-        // Calculate text width and center it in the block
         float textWidth = get_text_width(n->value, condFontSize);
         float textX = n->x - textWidth * 0.5f;  // Center the text
-        float textY = n->y;
-        draw_text(textX, textY, n->value, condFontSize, 0.0f, 0.0f, 0.0f);
+        
+        // If value is more than 7 characters, place it below the IF block
+        if (strlen(n->value) > 7) {
+            float textY = n->y - halfH - 0.05f;  // Below the diamond, moved up a bit
+            draw_text(textX, textY, n->value, condFontSize, 0.0f, 0.0f, 0.0f);
+        } else {
+            float textY = n->y;  // Inside the diamond (centered)
+            draw_text(textX, textY, n->value, condFontSize, 0.0f, 0.0f, 0.0f);
+        }
     }
 }
 

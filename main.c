@@ -3421,28 +3421,6 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
                     // Update node's owningIfBlock to match the branch it was added to
                     nodes[newNodeIndex].owningIfBlock = relevantIfBlock;
                     newNodeOwningIfBlock = relevantIfBlock;
-                    
-                    // #region agent log
-                    {
-                        FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-                        if (f) {
-                            fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"branch-add-check\",\"hypothesisId\":\"H1\",\"location\":\"main.c:insert_node_in_connection:added_to_true_branch\",\"message\":\"Added node to true branch\",\"data\":{\"newNodeIndex\":%d,\"relevantIfBlock\":%d,\"fromBranchColumn\":%d,\"addToTrueBranch\":%d},\"timestamp\":%ld}\n",
-                                newNodeIndex, relevantIfBlock, from->branchColumn, addToTrueBranch, time(NULL));
-                            fclose(f);
-                        }
-                    }
-                    // #endregion
-                } else {
-                    // #region agent log
-                    {
-                        FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-                        if (f) {
-                            fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"branch-add-check\",\"hypothesisId\":\"H1\",\"location\":\"main.c:insert_node_in_connection:failed_to_add_true_branch\",\"message\":\"Failed to add node to true branch (MAX_NODES)\",\"data\":{\"newNodeIndex\":%d,\"relevantIfBlock\":%d,\"trueBranchCount\":%d,\"MAX_NODES\":%d},\"timestamp\":%ld}\n",
-                                newNodeIndex, relevantIfBlock, ifBlocks[relevantIfBlock].trueBranchCount, MAX_NODES, time(NULL));
-                            fclose(f);
-                        }
-                    }
-                    // #endregion
                 }
             } else {
                 // Add to false branch
@@ -3453,28 +3431,6 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
                     // Update node's owningIfBlock to match the branch it was added to
                     nodes[newNodeIndex].owningIfBlock = relevantIfBlock;
                     newNodeOwningIfBlock = relevantIfBlock;
-                    
-                    // #region agent log
-                    {
-                        FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-                        if (f) {
-                            fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"branch-add-check\",\"hypothesisId\":\"H1\",\"location\":\"main.c:insert_node_in_connection:added_to_false_branch\",\"message\":\"Added node to false branch\",\"data\":{\"newNodeIndex\":%d,\"relevantIfBlock\":%d,\"fromBranchColumn\":%d,\"addToTrueBranch\":%d},\"timestamp\":%ld}\n",
-                                newNodeIndex, relevantIfBlock, from->branchColumn, addToTrueBranch, time(NULL));
-                            fclose(f);
-                        }
-                    }
-                    // #endregion
-                } else {
-                    // #region agent log
-                    {
-                        FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-                        if (f) {
-                            fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"branch-add-check\",\"hypothesisId\":\"H1\",\"location\":\"main.c:insert_node_in_connection:failed_to_add_false_branch\",\"message\":\"Failed to add node to false branch (MAX_NODES)\",\"data\":{\"newNodeIndex\":%d,\"relevantIfBlock\":%d,\"falseBranchCount\":%d,\"MAX_NODES\":%d},\"timestamp\":%ld}\n",
-                                newNodeIndex, relevantIfBlock, ifBlocks[relevantIfBlock].falseBranchCount, MAX_NODES, time(NULL));
-                            fclose(f);
-                        }
-                    }
-                    // #endregion
                 }
             }
         }
