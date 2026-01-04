@@ -4688,12 +4688,15 @@ void reposition_convergence_point(int ifBlockIndex, bool shouldPushNodesBelow) {
                 
                 // #region agent log
                 {
-                    FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-                    if (f) {
-                        fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"end-block-fix\",\"hypothesisId\":\"H9\",\"location\":\"main.c:reposition_convergence_point:check_node\",\"message\":\"Checking if node should move with convergence\",\"data\":{\"nodeIndex\":%d,\"nodeType\":%d,\"originalNodeY\":%.3f,\"currentNodeY\":%.3f,\"oldConvergeY\":%.3f,\"isMainBranch\":%d,\"isInSameParentBranch\":%d,\"owningIfBlock\":%d,\"ifBlockIndex\":%d,\"isFromDifferentNestedIF\":%d,\"shouldMove\":%d},\"timestamp\":%ld}\n",
-                            i, nodes[i].type, originalNodeYs[i], nodes[i].y, oldConvergeY, isMainBranch, isInSameParentBranch, nodes[i].owningIfBlock, ifBlockIndex, isFromDifferentNestedIF,
-                            (i != convergeIdx && originalNodeYs[i] < oldConvergeY && (isMainBranch || isInSameParentBranch) && nodes[i].owningIfBlock != ifBlockIndex && !isFromDifferentNestedIF), time(NULL));
-                        fclose(f);
+                    // Only log for end blocks or when debugging specific scenarios
+                    if (nodes[i].type == NODE_END || (nodes[i].type == NODE_END && originalNodeYs[i] < oldConvergeY)) {
+                        FILE *f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
+                        if (f) {
+                            bool shouldMove = (i != convergeIdx && originalNodeYs[i] < oldConvergeY && (isMainBranch || isInSameParentBranch) && nodes[i].owningIfBlock != ifBlockIndex && !isFromDifferentNestedIF);
+                            fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"end-block-movement\",\"hypothesisId\":\"H1\",\"location\":\"main.c:reposition_convergence_point:check_end_block\",\"message\":\"Checking end block movement\",\"data\":{\"nodeIndex\":%d,\"nodeType\":%d,\"originalNodeY\":%.3f,\"currentNodeY\":%.3f,\"oldConvergeY\":%.3f,\"isMainBranch\":%d,\"isInSameParentBranch\":%d,\"owningIfBlock\":%d,\"ifBlockIndex\":%d,\"isFromDifferentNestedIF\":%d,\"shouldMove\":%d,\"parentIfIdx\":%d,\"currentIfBranchColumn\":%d},\"timestamp\":%ld}\n",
+                                i, nodes[i].type, originalNodeYs[i], nodes[i].y, oldConvergeY, isMainBranch, isInSameParentBranch, nodes[i].owningIfBlock, ifBlockIndex, isFromDifferentNestedIF, shouldMove, parentIfIdx, currentIfBranchColumn, time(NULL));
+                            fclose(f);
+                        }
                     }
                 }
                 // #endregion
