@@ -3862,6 +3862,52 @@ void edit_node_value(int nodeIndex) {
         }
         // #endregion
         
+        // FIX: Adjust first body block position to compensate for connector position difference
+        // Cycle block bottom connector: y - height/2 = y - 0.13
+        // End block bottom connector: y - width/2 = y - 0.06
+        // Difference: 0.07 units
+        // When switching FROM WHILE to DO: connection FROM cycle (bottom at -0.13) becomes FROM end (bottom at -0.06)
+        //   -> first body block needs to move DOWN by 0.07 to compensate
+        // When switching FROM DO to WHILE: connection FROM end (bottom at -0.06) becomes FROM cycle (bottom at -0.13)
+        //   -> first body block needs to move UP by 0.07 to compensate
+        const double CONNECTOR_POSITION_DIFF = 0.07; // 0.13 - 0.06 = 0.07
+        int firstBodyNode = -1;
+        for (int i = 0; i < connectionCount; i++) {
+            int f = connections[i].fromNode;
+            int t = connections[i].toNode;
+            // Find the first body entry connection (the one that goes into the first body block)
+            // Use prevType to find the connection in the current state
+            if (isBodyNode[t] && ((prevType == CYCLE_DO && f == endNodeIndex) || (prevType != CYCLE_DO && f == cycleNodeIndex))) {
+                firstBodyNode = t;
+                break;
+            }
+        }
+        if (firstBodyNode >= 0) {
+            double adjustment = 0.0;
+            if (prevType == CYCLE_DO && chosenType != CYCLE_DO) {
+                // DO -> WHILE/FOR: end bottom connector (-0.06) to cycle bottom connector (-0.13)
+                // Cycle connector is 0.07 units lower, so move first body block UP
+                adjustment = -CONNECTOR_POSITION_DIFF;
+            } else if (prevType != CYCLE_DO && chosenType == CYCLE_DO) {
+                // WHILE/FOR -> DO: cycle bottom connector (-0.13) to end bottom connector (-0.06)
+                // End connector is 0.07 units higher, so move first body block DOWN
+                adjustment = CONNECTOR_POSITION_DIFF;
+            }
+            if (fabs(adjustment) > 0.001) {
+                double oldY = nodes[firstBodyNode].y;
+                nodes[firstBodyNode].y += adjustment;
+                // DO NOT snap to grid - preserve the micro-adjustment to compensate for connector position difference
+                // nodes[firstBodyNode].y = snap_to_grid_y(nodes[firstBodyNode].y);  // This was eliminating the adjustment!
+                // #region agent log
+                logFile = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
+                if (logFile) {
+                    fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"H6\",\"location\":\"main.c:3865\",\"message\":\"First body block position adjusted (no snap)\",\"data\":{\"firstBodyNode\":%d,\"oldY\":%.6f,\"adjustment\":%.6f,\"newY\":%.6f,\"prevType\":%d,\"chosenType\":%d},\"timestamp\":%ld}\n", firstBodyNode, oldY, adjustment, nodes[firstBodyNode].y, prevType, chosenType, time(NULL));
+                    fclose(logFile);
+                }
+                // #endregion
+            }
+        }
+        
         for (int i = 0; i < connectionCount; i++) {
             int f = connections[i].fromNode;
             int t = connections[i].toNode;
@@ -3927,23 +3973,6 @@ void edit_node_value(int nodeIndex) {
             float endTopConnector = (float)(endNode->y + endNode->width * 0.5f);
             float endBottomConnector = (float)(endNode->y - endNode->width * 0.5f);
             fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"G1\",\"location\":\"main.c:3919\",\"message\":\"Node positions and connectors before rewiring\",\"data\":{\"prevType\":%d,\"chosenType\":%d,\"cycleNode\":%d,\"cycleY\":%.6f,\"cycleHeight\":%.6f,\"cycleTopConn\":%.6f,\"cycleBottomConn\":%.6f,\"endNode\":%d,\"endY\":%.6f,\"endWidth\":%.6f,\"endTopConn\":%.6f,\"endBottomConn\":%.6f},\"timestamp\":%ld}\n", prevType, chosenType, cycleNodeIndex, cycleNode->y, cycleNode->height, cycleTopConnector, cycleBottomConnector, endNodeIndex, endNode->y, endNode->width, endTopConnector, endBottomConnector, time(NULL));
-            fclose(logFile);
-        }
-        // Log all connections before body rewiring with connector positions
-        logFile = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-        if (logFile) {
-            fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"F1\",\"location\":\"main.c:3919\",\"message\":\"Before body rewiring - all connections\",\"data\":{\"connectionCount\":%d,\"prevType\":%d,\"chosenType\":%d,\"cycleNode\":%d,\"endNode\":%d,\"nextTarget\":%d},\"timestamp\":%ld}\n", connectionCount, prevType, chosenType, cycleNodeIndex, endNodeIndex, nextTarget, time(NULL));
-            for (int i = 0; i < connectionCount; ++i) {
-                const FlowNode *fromNode = &nodes[connections[i].fromNode];
-                const FlowNode *toNode = &nodes[connections[i].toNode];
-                float fromConnectorY = (fromNode->type == NODE_CYCLE_END) ? 
-                    (float)(fromNode->y - fromNode->width * 0.5f) : 
-                    (float)(fromNode->y - fromNode->height * 0.5f);
-                float toConnectorY = (toNode->type == NODE_CYCLE_END) ? 
-                    (float)(toNode->y + toNode->width * 0.5f) : 
-                    (float)(toNode->y + toNode->height * 0.5f);
-                fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"F1\",\"location\":\"main.c:3919\",\"message\":\"Connection before\",\"data\":{\"connIdx\":%d,\"from\":%d,\"to\":%d,\"fromIsBody\":%d,\"toIsBody\":%d,\"fromConnectorY\":%.6f,\"toConnectorY\":%.6f},\"timestamp\":%ld}\n", i, connections[i].fromNode, connections[i].toNode, isBodyNode[connections[i].fromNode] ? 1 : 0, isBodyNode[connections[i].toNode] ? 1 : 0, fromConnectorY, toConnectorY, time(NULL));
-            }
             fclose(logFile);
         }
         // #endregion
@@ -4158,21 +4187,22 @@ void edit_node_value(int nodeIndex) {
                 fclose(logFile);
             }
             // #endregion
-            // Ensure middle connection exists for WHILE/FOR (cycle -> end for body entry)
+            // Ensure middle connection exists for WHILE/FOR (end -> cycle for loopback)
+            // CRITICAL FIX: For WHILE/FOR, loopback must be end->cycle (not cycle->end) so is_cycle_loopback() recognizes it
             if (middleConn < 0 && connectionCount < MAX_CONNECTIONS) {
                 middleConn = connectionCount++;
-                connections[middleConn].fromNode = cycleNodeIndex;
-                connections[middleConn].toNode = endNodeIndex;
+                connections[middleConn].fromNode = endNodeIndex;  // FIXED: was cycleNodeIndex
+                connections[middleConn].toNode = cycleNodeIndex;  // FIXED: was endNodeIndex
                 // #region agent log
                 logFile = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
                 if (logFile) {
-                    fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"post-fix\",\"hypothesisId\":\"H3\",\"location\":\"main.c:3900\",\"message\":\"WHILE/FOR middle connection created\",\"data\":{\"middleConn\":%d,\"from\":%d,\"to\":%d},\"timestamp\":%ld}\n", middleConn, cycleNodeIndex, endNodeIndex, time(NULL));
+                    fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"post-fix\",\"hypothesisId\":\"H3\",\"location\":\"main.c:3900\",\"message\":\"WHILE/FOR middle connection created\",\"data\":{\"middleConn\":%d,\"from\":%d,\"to\":%d},\"timestamp\":%ld}\n", middleConn, endNodeIndex, cycleNodeIndex, time(NULL));
                     fclose(logFile);
                 }
                 // #endregion
             } else if (middleConn >= 0) {
-                connections[middleConn].fromNode = cycleNodeIndex;
-                connections[middleConn].toNode = endNodeIndex;
+                connections[middleConn].fromNode = endNodeIndex;  // FIXED: was cycleNodeIndex
+                connections[middleConn].toNode = cycleNodeIndex;  // FIXED: was endNodeIndex
                 // #region agent log
                 logFile = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
                 if (logFile) {
@@ -4201,13 +4231,48 @@ void edit_node_value(int nodeIndex) {
             }
         }
         
-        // Log all connections after rewiring
+        // Log all connections after rewiring with detailed node type information
         // #region agent log
         logFile = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
         if (logFile) {
-            fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"F3\",\"location\":\"main.c:4176\",\"message\":\"After all rewiring - all connections\",\"data\":{\"connectionCount\":%d,\"chosenType\":%d,\"cycleNode\":%d,\"endNode\":%d,\"nextTarget\":%d},\"timestamp\":%ld}\n", connectionCount, chosenType, cycleNodeIndex, endNodeIndex, nextTarget, time(NULL));
+            fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"I1\",\"location\":\"main.c:4176\",\"message\":\"After all rewiring - all connections\",\"data\":{\"connectionCount\":%d,\"chosenType\":%d,\"cycleNode\":%d,\"endNode\":%d,\"nextTarget\":%d},\"timestamp\":%ld}\n", connectionCount, chosenType, cycleNodeIndex, endNodeIndex, nextTarget, time(NULL));
             for (int j = 0; j < connectionCount; j++) {
-                fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"F3\",\"location\":\"main.c:4176\",\"message\":\"Final connection\",\"data\":{\"connIdx\":%d,\"from\":%d,\"to\":%d,\"fromIsBody\":%d,\"toIsBody\":%d},\"timestamp\":%ld}\n", j, connections[j].fromNode, connections[j].toNode, isBodyNode[connections[j].fromNode] ? 1 : 0, isBodyNode[connections[j].toNode] ? 1 : 0, time(NULL));
+                int fromIdx = connections[j].fromNode;
+                int toIdx = connections[j].toNode;
+                const char* fromTypeName = "UNKNOWN";
+                const char* toTypeName = "UNKNOWN";
+                if (fromIdx >= 0 && fromIdx < nodeCount) {
+                    switch(nodes[fromIdx].type) {
+                        case NODE_START: fromTypeName = "START"; break;
+                        case NODE_END: fromTypeName = "END"; break;
+                        case NODE_PROCESS: fromTypeName = "PROCESS"; break;
+                        case NODE_INPUT: fromTypeName = "INPUT"; break;
+                        case NODE_OUTPUT: fromTypeName = "OUTPUT"; break;
+                        case NODE_CYCLE: fromTypeName = "CYCLE"; break;
+                        case NODE_CYCLE_END: fromTypeName = "CYCLE_END"; break;
+                        case NODE_IF: fromTypeName = "IF"; break;
+                        case NODE_CONVERGE: fromTypeName = "CONVERGE"; break;
+                        default: fromTypeName = "OTHER"; break;
+                    }
+                }
+                if (toIdx >= 0 && toIdx < nodeCount) {
+                    switch(nodes[toIdx].type) {
+                        case NODE_START: toTypeName = "START"; break;
+                        case NODE_END: toTypeName = "END"; break;
+                        case NODE_PROCESS: toTypeName = "PROCESS"; break;
+                        case NODE_INPUT: toTypeName = "INPUT"; break;
+                        case NODE_OUTPUT: toTypeName = "OUTPUT"; break;
+                        case NODE_CYCLE: toTypeName = "CYCLE"; break;
+                        case NODE_CYCLE_END: toTypeName = "CYCLE_END"; break;
+                        case NODE_IF: toTypeName = "IF"; break;
+                        case NODE_CONVERGE: toTypeName = "CONVERGE"; break;
+                        default: toTypeName = "OTHER"; break;
+                    }
+                }
+                int isCycleToEnd = (fromIdx == cycleNodeIndex && toIdx == endNodeIndex) ? 1 : 0;
+                int isEndToCycle = (fromIdx == endNodeIndex && toIdx == cycleNodeIndex) ? 1 : 0;
+                int involvesLoop = (fromIdx == cycleNodeIndex || fromIdx == endNodeIndex || toIdx == cycleNodeIndex || toIdx == endNodeIndex) ? 1 : 0;
+                fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"I1\",\"location\":\"main.c:4176\",\"message\":\"Final connection detail\",\"data\":{\"connIdx\":%d,\"from\":%d,\"fromType\":\"%s\",\"to\":%d,\"toType\":\"%s\",\"fromIsBody\":%d,\"toIsBody\":%d,\"isCycleToEnd\":%d,\"isEndToCycle\":%d,\"involvesLoop\":%d},\"timestamp\":%ld}\n", j, fromIdx, fromTypeName, toIdx, toTypeName, isBodyNode[fromIdx] ? 1 : 0, isBodyNode[toIdx] ? 1 : 0, isCycleToEnd, isEndToCycle, involvesLoop, time(NULL));
             }
             fclose(logFile);
         }
@@ -7416,7 +7481,17 @@ int main(void) {
         // So: world = (screen + scrollOffset) / scale
         double worldCursorX = (cursorX + scrollOffsetX) / FLOWCHART_SCALE;
         double worldCursorY = (cursorY + scrollOffsetY) / FLOWCHART_SCALE;
+        int prevHovered = hoveredConnection;
         hoveredConnection = hit_connection(worldCursorX, worldCursorY, 0.05f);
+        // #region agent log
+        if (hoveredConnection != prevHovered && hoveredConnection >= 0) {
+            FILE* logFile = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
+            if (logFile) {
+                fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"I4\",\"location\":\"main.c:7483\",\"message\":\"Hovered connection changed\",\"data\":{\"prevHovered\":%d,\"newHovered\":%d,\"from\":%d,\"to\":%d,\"worldCursorX\":%.6f,\"worldCursorY\":%.6f},\"timestamp\":%ld}\n", prevHovered, hoveredConnection, connections[hoveredConnection].fromNode, connections[hoveredConnection].toNode, worldCursorX, worldCursorY, time(NULL));
+                fclose(logFile);
+            }
+        }
+        // #endregion
         
         drawFlowchart(window);
         
