@@ -37,7 +37,9 @@ typedef enum {
     NODE_ASSIGNMENT = 6,
     NODE_DECLARE = 7,
     NODE_IF = 8,
-    NODE_CONVERGE = 9
+    NODE_CONVERGE = 9,
+    NODE_CYCLE = 10,
+    NODE_CYCLE_END = 11
 } NodeType;
 
 // Variable types (must match main.c)
@@ -145,6 +147,37 @@ static bool has_string_variables(void) {
         }
     }
     return false;
+}
+
+// Parse serialized cycle value string: TYPE|cond or FOR|init|cond|inc
+static void parse_cycle_value(const char* value, char* typeBuf, char* condBuf, char* initBuf, char* incrBuf) {
+    typeBuf[0] = condBuf[0] = initBuf[0] = incrBuf[0] = '\0';
+    if (!value) return;
+    
+    char temp[MAX_VALUE_LENGTH];
+    strncpy(temp, value, sizeof(temp) - 1);
+    temp[sizeof(temp) - 1] = '\0';
+    
+    char* token = strtok(temp, "|");
+    if (token) {
+        strncpy(typeBuf, token, MAX_VAR_NAME_LENGTH - 1);
+        typeBuf[MAX_VAR_NAME_LENGTH - 1] = '\0';
+    }
+    token = strtok(NULL, "|");
+    if (token) {
+        strncpy(condBuf, token, MAX_VALUE_LENGTH - 1);
+        condBuf[MAX_VALUE_LENGTH - 1] = '\0';
+    }
+    token = strtok(NULL, "|");
+    if (token) {
+        strncpy(initBuf, token, MAX_VALUE_LENGTH - 1);
+        initBuf[MAX_VALUE_LENGTH - 1] = '\0';
+    }
+    token = strtok(NULL, "|");
+    if (token) {
+        strncpy(incrBuf, token, MAX_VALUE_LENGTH - 1);
+        incrBuf[MAX_VALUE_LENGTH - 1] = '\0';
+    }
 }
 
 // Helper function to parse assignment
@@ -383,6 +416,13 @@ static bool export_to_c(const char* filename, struct FlowNode* nodes, int nodeCo
     int currentNode = startNode;
     int indentLevel = 1;
     
+    // Cycle stack (shallow, linear traversal)
+    char cycleTypeStack[32];
+    char cycleCondStack[32][MAX_VALUE_LENGTH];
+    char cycleInitStack[32][MAX_VALUE_LENGTH];
+    char cycleIncrStack[32][MAX_VALUE_LENGTH];
+    int cycleTop = 0;
+    
     while (currentNode >= 0 && currentNode < nodeCount && !visited[currentNode]) {
         visited[currentNode] = true;
         FlowNode* node = &nodes[currentNode];
@@ -613,6 +653,64 @@ static bool export_to_c(const char* filename, struct FlowNode* nodes, int nodeCo
             case NODE_CONVERGE:
                 // Convergence point - no code generation needed
                 break;
+            
+            case NODE_CYCLE: {
+                char typeBuf[MAX_VAR_NAME_LENGTH];
+                char condBuf[MAX_VALUE_LENGTH];
+                char initBuf[MAX_VALUE_LENGTH];
+                char incrBuf[MAX_VALUE_LENGTH];
+                parse_cycle_value(node->value, typeBuf, condBuf, initBuf, incrBuf);
+                
+                char loopType = 'W';
+                if (strncmp(typeBuf, "DO", 2) == 0) loopType = 'D';
+                else if (strncmp(typeBuf, "FOR", 3) == 0) loopType = 'F';
+                
+                if (cycleTop < 32) {
+                    cycleTypeStack[cycleTop] = loopType;
+                    strncpy(cycleCondStack[cycleTop], condBuf, MAX_VALUE_LENGTH - 1);
+                    cycleCondStack[cycleTop][MAX_VALUE_LENGTH - 1] = '\0';
+                    strncpy(cycleInitStack[cycleTop], initBuf, MAX_VALUE_LENGTH - 1);
+                    cycleInitStack[cycleTop][MAX_VALUE_LENGTH - 1] = '\0';
+                    strncpy(cycleIncrStack[cycleTop], incrBuf, MAX_VALUE_LENGTH - 1);
+                    cycleIncrStack[cycleTop][MAX_VALUE_LENGTH - 1] = '\0';
+                    cycleTop++;
+                }
+                
+                for (int i = 0; i < indentLevel; i++) fprintf(file, "    ");
+                if (loopType == 'F') {
+                    fprintf(file, "for (%s; %s; %s) {\n",
+                            initBuf[0] ? initBuf : "/* init */",
+                            condBuf[0] ? condBuf : "/* condition */",
+                            incrBuf[0] ? incrBuf : "/* step */");
+                } else if (loopType == 'D') {
+                    fprintf(file, "do {\n");
+                } else {
+                    fprintf(file, "while (%s) {\n", condBuf[0] ? condBuf : "/* condition */");
+                }
+                indentLevel++;
+                break;
+            }
+            
+            case NODE_CYCLE_END: {
+                if (cycleTop > 0) {
+                    cycleTop--;
+                    indentLevel = (indentLevel > 0) ? indentLevel - 1 : 0;
+                    char loopType = cycleTypeStack[cycleTop];
+                    const char* cond = cycleCondStack[cycleTop];
+                    
+                    for (int i = 0; i < indentLevel; i++) fprintf(file, "    ");
+                    if (loopType == 'D') {
+                        fprintf(file, "} while (%s);\n", cond[0] ? cond : "/* condition */");
+                    } else {
+                        fprintf(file, "}\n");
+                    }
+                } else {
+                    if (indentLevel > 0) indentLevel--;
+                    for (int i = 0; i < indentLevel; i++) fprintf(file, "    ");
+                    fprintf(file, "}\n");
+                }
+                break;
+            }
                 
             default:
                 break;

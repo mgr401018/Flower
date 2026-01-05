@@ -18,7 +18,12 @@
 #include "src/block_declare.h"
 #include "src/block_if.h"
 #include "src/block_converge.h"
+#include "src/block_cycle.h"
+#include "src/block_cycle_end.h"
 #include "src/code_exporter.h"
+
+// Forward declaration for local tinyfd_listDialog implementation
+static int tinyfd_listDialog(const char* aTitle, const char* aMessage, int numOptions, const char* const* options);
 
 // Global variables for cursor position
 double cursorX = 0.0;
@@ -63,7 +68,9 @@ typedef enum {
     NODE_ASSIGNMENT = 6,
     NODE_DECLARE = 7,
     NODE_IF = 8,
-    NODE_CONVERGE = 9
+    NODE_CONVERGE = 9,
+    NODE_CYCLE = 10,
+    NODE_CYCLE_END = 11
 } NodeType;
 
 typedef struct FlowNode {
@@ -105,12 +112,99 @@ typedef struct {
 IFBlock ifBlocks[MAX_IF_BLOCKS];
 int ifBlockCount = 0;
 
+// Cycle tracking system
+#define MAX_CYCLE_BLOCKS 50
+typedef enum {
+    CYCLE_WHILE = 0,
+    CYCLE_DO = 1,
+    CYCLE_FOR = 2
+} CycleType;
+
+typedef struct {
+    int cycleNodeIndex;        // Index of the cycle block
+    int cycleEndNodeIndex;     // Index of the cycle end point
+    int parentCycleIndex;      // Parent cycle (-1 if none)
+    CycleType cycleType;       // Loop type
+    float loopbackOffset;      // X offset for loopback routing
+    char initVar[MAX_VAR_NAME_LENGTH];   // FOR init variable (optional)
+    char condition[MAX_VALUE_LENGTH];    // Loop condition
+    char increment[MAX_VALUE_LENGTH];    // FOR increment/decrement
+} CycleBlock;
+
+CycleBlock cycleBlocks[MAX_CYCLE_BLOCKS];
+int cycleBlockCount = 0;
+
 // Forward declarations
 void rebuild_variable_table(void);
 int get_if_branch_type(int connIndex);
 void reposition_convergence_point(int ifBlockIndex, bool shouldPushNodesBelow);
 void update_all_branch_positions(void);
 bool is_valid_if_converge_connection(int fromNode, int toNode);
+void insert_cycle_block_in_connection(int connIndex);
+
+// Cycle helper utilities
+static int find_cycle_block_by_cycle_node(int nodeIndex) {
+    for (int i = 0; i < cycleBlockCount; i++) {
+        if (cycleBlocks[i].cycleNodeIndex == nodeIndex) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static int find_cycle_block_by_end_node(int nodeIndex) {
+    for (int i = 0; i < cycleBlockCount; i++) {
+        if (cycleBlocks[i].cycleEndNodeIndex == nodeIndex) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static int calculate_cycle_depth(int cycleIndex) {
+    int depth = 0;
+    int current = cycleIndex;
+    while (current >= 0 && current < cycleBlockCount) {
+        depth++;
+        current = cycleBlocks[current].parentCycleIndex;
+    }
+    return depth;
+}
+
+static float get_cycle_loopback_offset(int cycleIndex) {
+    if (cycleIndex < 0 || cycleIndex >= cycleBlockCount) return 0.3f;
+    if (cycleBlocks[cycleIndex].loopbackOffset > 0.0f) {
+        return cycleBlocks[cycleIndex].loopbackOffset;
+    }
+    
+    // Base offset - doesn't expand with block width
+    float offset = 0.3f;
+    
+    // Count direct children (nested loops)
+    int childCount = 0;
+    for (int i = 0; i < cycleBlockCount; i++) {
+        if (cycleBlocks[i].parentCycleIndex == cycleIndex) {
+            childCount++;
+        }
+    }
+    
+    // Parent loops (with children) move further left to avoid overlap
+    // Children loops stay at base offset
+    if (childCount > 0) {
+        offset += 0.25f * (float)childCount;
+    }
+    
+    return offset;
+}
+
+static CycleType prompt_cycle_type(void) {
+    const char* options[] = {"WHILE", "DO", "FOR"};
+    int selection = tinyfd_listDialog("Loop Type", "Select loop type:", 3, options);
+    if (selection < 0 || selection > 2) {
+        return CYCLE_WHILE;
+    }
+    return (CycleType)selection;
+}
 
 // Variable tracking system
 typedef enum {
@@ -171,9 +265,10 @@ MenuItem connectionMenuItems[] = {
     {"Output", NODE_OUTPUT},
     {"Assignment", NODE_ASSIGNMENT},
     {"Declare", NODE_DECLARE},
-    {"IF", NODE_IF}
+    {"IF", NODE_IF},
+    {"Cycle", NODE_CYCLE}
 };
-int connectionMenuItemCount = 6;
+int connectionMenuItemCount = 7;
 
 // Node menu items (for node operations)
 typedef struct {
@@ -318,9 +413,42 @@ static float point_to_line_segment_dist(float px, float py, float x1, float y1, 
     return sqrt((px - projX)*(px - projX) + (py - projY)*(py - projY));
 }
 
+// Check if a connection is a cycle loopback (should not be clickable)
+static bool is_cycle_loopback(int connIndex) {
+    if (connIndex < 0 || connIndex >= connectionCount) return false;
+    int from = connections[connIndex].fromNode;
+    int to = connections[connIndex].toNode;
+    
+    for (int c = 0; c < cycleBlockCount; c++) {
+        int cycleNode = cycleBlocks[c].cycleNodeIndex;
+        int endNode = cycleBlocks[c].cycleEndNodeIndex;
+        
+        // For WHILE/FOR: loopback is end -> cycle (backwards)
+        // For DO: loopback is cycle -> end (backwards from normal flow)
+        // The loopback is always the connection that goes in the "backwards" direction
+        if (cycleBlocks[c].cycleType == CYCLE_DO) {
+            // DO: loopback is cycle -> end (this is the bracket line)
+            if (from == cycleNode && to == endNode) {
+                return true;
+            }
+        } else {
+            // WHILE/FOR: loopback is end -> cycle (this is the bracket line)
+            if (from == endNode && to == cycleNode) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 // Find which connection (L-shaped path) the cursor is near
 static int hit_connection(double x, double y, float threshold) {
     for (int i = 0; i < connectionCount; ++i) {
+        // Skip cycle loopback connections (they're drawn as bracket lines, not clickable)
+        if (is_cycle_loopback(i)) {
+            continue;
+        }
+        
         const FlowNode *from = &nodes[connections[i].fromNode];
         const FlowNode *to   = &nodes[connections[i].toNode];
         
@@ -545,6 +673,21 @@ void save_flowchart(const char* filename) {
         }
         fprintf(file, "\n");  // Always write newline, even for empty branches
     }
+
+    // Write Cycle blocks data
+    fprintf(file, "# Cycle Blocks: %d\n", cycleBlockCount);
+    for (int i = 0; i < cycleBlockCount; i++) {
+        fprintf(file, "%d %d %d %d %.3f\n",
+                cycleBlocks[i].cycleNodeIndex,
+                cycleBlocks[i].cycleEndNodeIndex,
+                cycleBlocks[i].parentCycleIndex,
+                (int)cycleBlocks[i].cycleType,
+                cycleBlocks[i].loopbackOffset);
+        fprintf(file, "%s|%s|%s\n",
+                cycleBlocks[i].initVar,
+                cycleBlocks[i].condition,
+                cycleBlocks[i].increment);
+    }
     
     fclose(file);
     printf("Flowchart saved to %s\n", filename);
@@ -665,7 +808,8 @@ void load_flowchart(const char* filename) {
         // Recalculate width for content blocks based on text content
         if (nodes[i].type == NODE_PROCESS || nodes[i].type == NODE_NORMAL ||
             nodes[i].type == NODE_INPUT || nodes[i].type == NODE_OUTPUT ||
-            nodes[i].type == NODE_ASSIGNMENT || nodes[i].type == NODE_DECLARE) {
+            nodes[i].type == NODE_ASSIGNMENT || nodes[i].type == NODE_DECLARE ||
+            nodes[i].type == NODE_CYCLE) {
             float fontSize = nodes[i].height * 0.3f;
             nodes[i].width = calculate_block_width(nodes[i].value, fontSize, 0.35f);
         } else {
@@ -1018,6 +1162,46 @@ void load_flowchart(const char* filename) {
                 }
                 nodes[nodeIdx].branchColumn = falseBranchCol;
             }
+        }
+    }
+    
+    // Load Cycle blocks (if present)
+    cycleBlockCount = 0;
+    // Seek cycle header if available
+    fpos_t cyclePos;
+    fgetpos(file, &cyclePos);
+    while (fgets(line, sizeof(line), file)) {
+        if (strncmp(line, "# Cycle Blocks:", 15) == 0) {
+            sscanf(line + 15, "%d", &cycleBlockCount);
+            break;
+        }
+    }
+    if (cycleBlockCount < 0) cycleBlockCount = 0;
+    if (cycleBlockCount > MAX_CYCLE_BLOCKS) cycleBlockCount = MAX_CYCLE_BLOCKS;
+    
+    for (int i = 0; i < cycleBlockCount; i++) {
+        float offset = 0.0f;
+        int cycleTypeInt = 0;
+        if (fscanf(file, "%d %d %d %d %f",
+                   &cycleBlocks[i].cycleNodeIndex,
+                   &cycleBlocks[i].cycleEndNodeIndex,
+                   &cycleBlocks[i].parentCycleIndex,
+                   &cycleTypeInt,
+                   &offset) != 5) {
+            cycleBlockCount = i;
+            break;
+        }
+        cycleBlocks[i].cycleType = (CycleType)cycleTypeInt;
+        cycleBlocks[i].loopbackOffset = offset;
+        
+        // Read init|condition|increment line
+        if (fscanf(file, "%255[^|]|%255[^|]|%255[^\n]\n",
+                   cycleBlocks[i].initVar,
+                   cycleBlocks[i].condition,
+                   cycleBlocks[i].increment) != 3) {
+            cycleBlocks[i].initVar[0] = '\0';
+            cycleBlocks[i].condition[0] = '\0';
+            cycleBlocks[i].increment[0] = '\0';
         }
     }
     
@@ -3453,6 +3637,389 @@ void edit_node_value(int nodeIndex) {
         float fontSize = node->height * 0.3f;
         node->width = calculate_block_width(node->value, fontSize, 0.35f);
         
+    } else if (node->type == NODE_CYCLE) {
+        int cycleIdx = find_cycle_block_by_cycle_node(nodeIndex);
+        if (cycleIdx < 0 || cycleIdx >= cycleBlockCount) return;
+        CycleBlock *cycle = &cycleBlocks[cycleIdx];
+        
+        // Select type (default WHILE)
+        CycleType prevType = cycle->cycleType;
+        CycleType chosenType = prompt_cycle_type();
+        cycle->cycleType = chosenType;
+        
+        // Adjust wiring/positions if type changed (handles DO reversal)
+        int cycleNodeIndex = cycle->cycleNodeIndex;
+        int endNodeIndex = cycle->cycleEndNodeIndex;
+        int parentConn = -1, middleConn = -1, nextConn = -1, nextTarget = -1;
+        int parentToCycle = -1, parentToEnd = -1;
+        
+        // First, find next target (needed for body node detection)
+        for (int i = 0; i < connectionCount; i++) {
+            int f = connections[i].fromNode;
+            int t = connections[i].toNode;
+            if ((f == cycleNodeIndex || f == endNodeIndex) && t != cycleNodeIndex && t != endNodeIndex) {
+                nextConn = i;
+                nextTarget = t;
+                break; // Just need one next target
+            }
+        }
+        
+        // Identify all body nodes (nodes that are part of the loop body)
+        // Body nodes are those that are reachable from cycle/end through the loop body
+        bool isBodyNode[MAX_NODES] = {false};
+        bool changed = true;
+        // Start with nodes directly connected to cycle/end (excluding next target)
+        for (int i = 0; i < connectionCount; i++) {
+            int f = connections[i].fromNode;
+            int t = connections[i].toNode;
+            // If a node connects from cycle/end (and is not next target), it's a body node
+            if ((f == cycleNodeIndex || f == endNodeIndex) && t != cycleNodeIndex && t != endNodeIndex && t != nextTarget) {
+                isBodyNode[t] = true;
+            }
+            // If a node connects to cycle/end (and is not the parent), it might be a body node
+            // We'll mark it as body node if it's also reachable from cycle/end
+            if ((t == cycleNodeIndex || t == endNodeIndex) && f != cycleNodeIndex && f != endNodeIndex) {
+                // Check if 'f' is reachable from cycle/end (making it a body node)
+                for (int j = 0; j < connectionCount; j++) {
+                    if ((connections[j].fromNode == cycleNodeIndex || connections[j].fromNode == endNodeIndex) && 
+                        connections[j].toNode == f) {
+                        isBodyNode[f] = true;
+                        break;
+                    }
+                }
+            }
+        }
+        // Propagate: any node connected to a body node is also a body node
+        while (changed) {
+            changed = false;
+            for (int i = 0; i < connectionCount; i++) {
+                int f = connections[i].fromNode;
+                int t = connections[i].toNode;
+                // Skip connections involving cycle/end/nextTarget
+                if (f == cycleNodeIndex || f == endNodeIndex || f == nextTarget ||
+                    t == cycleNodeIndex || t == endNodeIndex || t == nextTarget) {
+                    continue;
+                }
+                if (isBodyNode[f] && !isBodyNode[t]) {
+                    isBodyNode[t] = true;
+                    changed = true;
+                }
+                if (isBodyNode[t] && !isBodyNode[f]) {
+                    isBodyNode[f] = true;
+                    changed = true;
+                }
+            }
+        }
+        
+        for (int i = 0; i < connectionCount; i++) {
+            int f = connections[i].fromNode;
+            int t = connections[i].toNode;
+            // Find parent connections - exclude body nodes
+            if (t == cycleNodeIndex && f != cycleNodeIndex && f != endNodeIndex && !isBodyNode[f]) {
+                parentToCycle = i;
+            }
+            if (t == endNodeIndex && f != cycleNodeIndex && f != endNodeIndex && !isBodyNode[f]) {
+                parentToEnd = i;
+            }
+            if ((f == cycleNodeIndex && t == endNodeIndex) || (f == endNodeIndex && t == cycleNodeIndex)) {
+                middleConn = i;
+            }
+            if ((f == cycleNodeIndex || f == endNodeIndex) && t != cycleNodeIndex && t != endNodeIndex) {
+                nextConn = i;
+                nextTarget = t;
+            }
+        }
+        // Prefer parent to cycle (for WHILE/FOR), but use parent to end if that's all we have
+        // However, we must ensure the selected parent is NOT a body node
+        if (parentToCycle >= 0 && !isBodyNode[connections[parentToCycle].fromNode]) {
+            parentConn = parentToCycle;
+        } else if (parentToEnd >= 0 && !isBodyNode[connections[parentToEnd].fromNode]) {
+            parentConn = parentToEnd;
+        } else {
+            // Fallback: use whichever exists (shouldn't happen if body detection works)
+            parentConn = (parentToCycle >= 0) ? parentToCycle : parentToEnd;
+        }
+        int parentNode = (parentConn >= 0) ? connections[parentConn].fromNode : -1;
+        
+        // #region agent log
+        FILE* logFile = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
+        if (logFile) {
+            fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"post-fix\",\"hypothesisId\":\"rewire\",\"location\":\"main.c:3640\",\"message\":\"Parent connection detection\",\"data\":{\"parentToCycle\":%d,\"parentToEnd\":%d,\"parentConn\":%d,\"parentNode\":%d},\"timestamp\":%ld}\n", parentToCycle, parentToEnd, parentConn, parentNode, time(NULL));
+            if (parentToCycle >= 0) {
+                fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"post-fix\",\"hypothesisId\":\"rewire\",\"location\":\"main.c:3640\",\"message\":\"ParentToCycle connection\",\"data\":{\"from\":%d,\"to\":%d},\"timestamp\":%ld}\n", connections[parentToCycle].fromNode, connections[parentToCycle].toNode, time(NULL));
+            }
+            if (parentToEnd >= 0) {
+                fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"post-fix\",\"hypothesisId\":\"rewire\",\"location\":\"main.c:3640\",\"message\":\"ParentToEnd connection\",\"data\":{\"from\":%d,\"to\":%d},\"timestamp\":%ld}\n", connections[parentToEnd].fromNode, connections[parentToEnd].toNode, time(NULL));
+            }
+            fclose(logFile);
+        }
+        // #endregion
+        
+        // Log all connections before rewiring
+        // #region agent log
+        logFile = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
+        if (logFile) {
+            fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"post-fix\",\"hypothesisId\":\"rewire\",\"location\":\"main.c:3651\",\"message\":\"Before body rewire - all connections\",\"data\":{\"connectionCount\":%d,\"cycleNode\":%d,\"endNode\":%d},\"timestamp\":%ld}\n", connectionCount, cycleNodeIndex, endNodeIndex, time(NULL));
+            for (int j = 0; j < connectionCount; j++) {
+                fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"post-fix\",\"hypothesisId\":\"rewire\",\"location\":\"main.c:3651\",\"message\":\"Connection\",\"data\":{\"idx\":%d,\"from\":%d,\"to\":%d,\"isParent\":%d,\"isMiddle\":%d,\"isNext\":%d},\"timestamp\":%ld}\n", j, connections[j].fromNode, connections[j].toNode, (j == parentConn ? 1 : 0), (j == middleConn ? 1 : 0), (j == nextConn ? 1 : 0), time(NULL));
+            }
+            fclose(logFile);
+        }
+        // #endregion
+        
+        // Rewire body connections to keep loop body intact
+        int bodyRewireCount = 0;
+        for (int i = 0; i < connectionCount; i++) {
+            if (i == parentConn || i == middleConn || i == nextConn) continue;
+            int f = connections[i].fromNode;
+            int t = connections[i].toNode;
+            
+            if (chosenType == CYCLE_DO) {
+                // DO: end -> [body] -> cycle
+                // Rewire FROM cycle to FROM end (body entry)
+                if (f == cycleNodeIndex && t != endNodeIndex && t != nextTarget) {
+                    connections[i].fromNode = endNodeIndex;
+                    bodyRewireCount++;
+                    // #region agent log
+                    logFile = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
+                    if (logFile) {
+                        fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"post-fix\",\"hypothesisId\":\"rewire\",\"location\":\"main.c:3660\",\"message\":\"DO: FROM cycle rewired\",\"data\":{\"connIdx\":%d,\"oldFrom\":%d,\"newFrom\":%d,\"to\":%d},\"timestamp\":%ld}\n", i, f, endNodeIndex, t, time(NULL));
+                        fclose(logFile);
+                    }
+                    // #endregion
+                }
+                // Rewire TO end to TO cycle (body exit)
+                if (t == endNodeIndex && f != cycleNodeIndex && f != parentNode && f != endNodeIndex) {
+                    connections[i].toNode = cycleNodeIndex;
+                    bodyRewireCount++;
+                    // #region agent log
+                    logFile = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
+                    if (logFile) {
+                        fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"post-fix\",\"hypothesisId\":\"rewire\",\"location\":\"main.c:3664\",\"message\":\"DO: TO end rewired\",\"data\":{\"connIdx\":%d,\"from\":%d,\"oldTo\":%d,\"newTo\":%d},\"timestamp\":%ld}\n", i, f, t, cycleNodeIndex, time(NULL));
+                        fclose(logFile);
+                    }
+                    // #endregion
+                }
+            } else {
+                // WHILE/FOR: cycle -> [body] -> end
+                // Rewire FROM end to FROM cycle (body entry)
+                if (f == endNodeIndex && t != cycleNodeIndex && t != nextTarget) {
+                    connections[i].fromNode = cycleNodeIndex;
+                    bodyRewireCount++;
+                    // #region agent log
+                    logFile = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
+                    if (logFile) {
+                        fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"post-fix\",\"hypothesisId\":\"rewire\",\"location\":\"main.c:3669\",\"message\":\"WHILE/FOR: FROM end rewired\",\"data\":{\"connIdx\":%d,\"oldFrom\":%d,\"newFrom\":%d,\"to\":%d},\"timestamp\":%ld}\n", i, f, cycleNodeIndex, t, time(NULL));
+                        fclose(logFile);
+                    }
+                    // #endregion
+                }
+                // Rewire TO cycle to TO end (body exit)
+                if (t == cycleNodeIndex && f != endNodeIndex && f != parentNode && f != cycleNodeIndex) {
+                    connections[i].toNode = endNodeIndex;
+                    bodyRewireCount++;
+                    // #region agent log
+                    logFile = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
+                    if (logFile) {
+                        fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"post-fix\",\"hypothesisId\":\"rewire\",\"location\":\"main.c:3673\",\"message\":\"WHILE/FOR: TO cycle rewired\",\"data\":{\"connIdx\":%d,\"from\":%d,\"oldTo\":%d,\"newTo\":%d},\"timestamp\":%ld}\n", i, f, t, endNodeIndex, time(NULL));
+                        fclose(logFile);
+                    }
+                    // #endregion
+                }
+            }
+        }
+        // #region agent log
+        logFile = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
+        if (logFile) {
+            fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"post-fix\",\"hypothesisId\":\"rewire\",\"location\":\"main.c:3646\",\"message\":\"Body rewired\",\"data\":{\"bodyRewireCount\":%d,\"chosenType\":%d},\"timestamp\":%ld}\n", bodyRewireCount, chosenType, time(NULL));
+            fclose(logFile);
+        }
+        // #endregion
+        
+        if (chosenType == CYCLE_DO) {
+            // Swap vertical order so end point is above cycle block
+            if (nodes[endNodeIndex].y < nodes[cycleNodeIndex].y) {
+                double tmpY = nodes[cycleNodeIndex].y;
+                nodes[cycleNodeIndex].y = nodes[endNodeIndex].y;
+                nodes[endNodeIndex].y = tmpY;
+            }
+            // Rewire: parent -> end, end -> cycle, cycle -> next
+            if (parentConn >= 0) {
+                int oldTo = connections[parentConn].toNode;
+                connections[parentConn].toNode = endNodeIndex;
+                // #region agent log
+                logFile = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
+                if (logFile) {
+                    fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"post-fix\",\"hypothesisId\":\"rewire\",\"location\":\"main.c:3695\",\"message\":\"DO parent rewired\",\"data\":{\"parentConn\":%d,\"oldTo\":%d,\"newTo\":%d},\"timestamp\":%ld}\n", parentConn, oldTo, endNodeIndex, time(NULL));
+                    fclose(logFile);
+                }
+                // #endregion
+            }
+            // Ensure middle connection exists for DO (cycle -> end for loopback)
+            if (middleConn < 0 && connectionCount < MAX_CONNECTIONS) {
+                middleConn = connectionCount++;
+                connections[middleConn].fromNode = cycleNodeIndex;
+                connections[middleConn].toNode = endNodeIndex;
+            } else if (middleConn >= 0) {
+                connections[middleConn].fromNode = cycleNodeIndex;
+                connections[middleConn].toNode = endNodeIndex;
+            }
+            if (nextConn >= 0 && nextTarget >= 0) {
+                connections[nextConn].fromNode = cycleNodeIndex;
+                connections[nextConn].toNode = nextTarget;
+            }
+        } else {
+            // WHILE/FOR: cycle above end
+            if (nodes[cycleNodeIndex].y < nodes[endNodeIndex].y) {
+                double tmpY = nodes[cycleNodeIndex].y;
+                nodes[cycleNodeIndex].y = nodes[endNodeIndex].y;
+                nodes[endNodeIndex].y = tmpY;
+            }
+            // Rewire: parent -> cycle, cycle -> end, end -> next
+            if (parentConn >= 0) {
+                int oldTo = connections[parentConn].toNode;
+                connections[parentConn].toNode = cycleNodeIndex;
+                // #region agent log
+                logFile = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
+                if (logFile) {
+                    fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"post-fix\",\"hypothesisId\":\"rewire\",\"location\":\"main.c:3813\",\"message\":\"WHILE/FOR parent rewired\",\"data\":{\"parentConn\":%d,\"oldTo\":%d,\"newTo\":%d},\"timestamp\":%ld}\n", parentConn, oldTo, cycleNodeIndex, time(NULL));
+                    fclose(logFile);
+                }
+                // #endregion
+            }
+            // Ensure middle connection exists for WHILE/FOR
+            if (middleConn < 0 && connectionCount < MAX_CONNECTIONS) {
+                middleConn = connectionCount++;
+                connections[middleConn].fromNode = cycleNodeIndex;
+                connections[middleConn].toNode = endNodeIndex;
+            } else if (middleConn >= 0) {
+                connections[middleConn].fromNode = cycleNodeIndex;
+                connections[middleConn].toNode = endNodeIndex;
+            }
+            if (nextConn >= 0 && nextTarget >= 0) {
+                connections[nextConn].fromNode = endNodeIndex;
+                connections[nextConn].toNode = nextTarget;
+            }
+        }
+        
+        // Log all connections after rewiring
+        // #region agent log
+        logFile = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
+        if (logFile) {
+            fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"post-fix\",\"hypothesisId\":\"rewire\",\"location\":\"main.c:3770\",\"message\":\"After all rewiring - all connections\",\"data\":{\"connectionCount\":%d,\"chosenType\":%d},\"timestamp\":%ld}\n", connectionCount, chosenType, time(NULL));
+            for (int j = 0; j < connectionCount; j++) {
+                fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"post-fix\",\"hypothesisId\":\"rewire\",\"location\":\"main.c:3770\",\"message\":\"Final connection\",\"data\":{\"idx\":%d,\"from\":%d,\"to\":%d},\"timestamp\":%ld}\n", j, connections[j].fromNode, connections[j].toNode, time(NULL));
+            }
+            fclose(logFile);
+        }
+        // #endregion
+        // #region agent log
+        logFile = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
+        if (logFile) {
+            fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"post-fix\",\"hypothesisId\":\"rewire\",\"location\":\"main.c:3669\",\"message\":\"Main rewired\",\"data\":{\"parentConn\":%d,\"middleConn\":%d,\"nextConn\":%d,\"chosenType\":%d},\"timestamp\":%ld}\n", parentConn, middleConn, nextConn, chosenType, time(NULL));
+            fclose(logFile);
+        }
+        // #endregion
+        
+        if (chosenType == CYCLE_FOR) {
+            // FOR: init, condition, increment
+            const char* initDefault = cycle->initVar[0] ? cycle->initVar : "i = 0";
+            const char* initResult = tinyfd_inputBox(
+                "For Init",
+                "Initialize loop variable (e.g., int i = 0 or i = 0):",
+                initDefault
+            );
+            if (!initResult || initResult[0] == '\0') return;
+            
+            // Copy immediately to avoid buffer reuse
+            char initVarCopy[MAX_VALUE_LENGTH];
+            strncpy(initVarCopy, initResult, sizeof(initVarCopy) - 1);
+            initVarCopy[sizeof(initVarCopy) - 1] = '\0';
+            
+            const char* condDefault = cycle->condition[0] ? cycle->condition : "i < 10";
+            const char* condResult = tinyfd_inputBox(
+                "For Condition",
+                "Enter loop condition (e.g., i < 10):",
+                condDefault
+            );
+            if (!condResult || condResult[0] == '\0') return;
+            
+            // Copy immediately to avoid buffer reuse
+            char condCopy[MAX_VALUE_LENGTH];
+            strncpy(condCopy, condResult, sizeof(condCopy) - 1);
+            condCopy[sizeof(condCopy) - 1] = '\0';
+            
+            const char* incrDefault = cycle->increment[0] ? cycle->increment : "i++";
+            const char* incrResult = tinyfd_inputBox(
+                "For Increment",
+                "Enter increment/decrement (e.g., i++ or i += 1):",
+                incrDefault
+            );
+            if (!incrResult || incrResult[0] == '\0') return;
+            
+            // Copy immediately to avoid buffer reuse
+            char incrCopy[MAX_VALUE_LENGTH];
+            strncpy(incrCopy, incrResult, sizeof(incrCopy) - 1);
+            incrCopy[sizeof(incrCopy) - 1] = '\0';
+            
+            // Persist using copies
+            strncpy(cycle->initVar, initVarCopy, sizeof(cycle->initVar) - 1);
+            cycle->initVar[sizeof(cycle->initVar) - 1] = '\0';
+            
+            strncpy(cycle->condition, condCopy, sizeof(cycle->condition) - 1);
+            cycle->condition[sizeof(cycle->condition) - 1] = '\0';
+            
+            strncpy(cycle->increment, incrCopy, sizeof(cycle->increment) - 1);
+            cycle->increment[sizeof(cycle->increment) - 1] = '\0';
+            
+            // Try to capture init variable name for variable table (best effort)
+            char varName[MAX_VAR_NAME_LENGTH];
+            int pos = 0;
+            const char* p = cycle->initVar;
+            while (*p == ' ' || *p == '\t') p++;
+            while ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || *p == '_' || (*p >= '0' && *p <= '9')) {
+                if (pos < MAX_VAR_NAME_LENGTH - 1) {
+                    varName[pos++] = *p;
+                }
+                p++;
+            }
+            varName[pos] = '\0';
+            if (pos > 0 && is_valid_variable_name(varName) && !variable_name_exists(varName, -1) && variableCount < MAX_VARIABLES) {
+                Variable *v = &variables[variableCount++];
+                strncpy(v->name, varName, MAX_VAR_NAME_LENGTH - 1);
+                v->name[MAX_VAR_NAME_LENGTH - 1] = '\0';
+                v->type = VAR_TYPE_INT;
+                v->is_array = false;
+                v->array_size = 0;
+            }
+            
+            snprintf(node->value, MAX_VALUE_LENGTH, "FOR|%s|%s|%s", cycle->initVar, cycle->condition, cycle->increment);
+        } else {
+            const char* condPrompt = (chosenType == CYCLE_DO) ? "Enter post-condition (evaluated after body):" : "Enter condition (evaluated before body):";
+            const char* condResult = tinyfd_inputBox(
+                "Loop Condition",
+                condPrompt,
+                cycle->condition[0] ? cycle->condition : "true"
+            );
+            if (!condResult || condResult[0] == '\0') return;
+            
+            strncpy(cycle->condition, condResult, sizeof(cycle->condition) - 1);
+            cycle->condition[sizeof(cycle->condition) - 1] = '\0';
+            
+            snprintf(node->value, MAX_VALUE_LENGTH, "%s|%s",
+                     (chosenType == CYCLE_DO) ? "DO" : "WHILE",
+                     cycle->condition);
+        }
+        
+        // Slight offset if inside an IF to avoid overlap
+        if (node->owningIfBlock >= 0 && cycle->loopbackOffset < 0.45f) {
+            cycle->loopbackOffset += 0.15f;
+        }
+        
+        // Adjust width to fit label
+        float fontSize = node->height * 0.3f;
+        node->width = calculate_block_width(node->value, fontSize, 0.35f);
+        
     } else {
         // Other block types - use simple input dialog
         const char* result = tinyfd_inputBox(
@@ -3475,7 +4042,25 @@ void edit_node_value(int nodeIndex) {
 }
 
 void insert_node_in_connection(int connIndex, NodeType nodeType) {
+    // #region agent log
+    FILE* logFile = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
+    if (logFile) {
+        fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"post-fix\",\"hypothesisId\":\"insert\",\"location\":\"main.c:3922\",\"message\":\"insert_node_in_connection called\",\"data\":{\"connIndex\":%d,\"nodeType\":%d,\"nodeCount\":%d,\"connectionCount\":%d},\"timestamp\":%ld}\n", connIndex, nodeType, nodeCount, connectionCount, time(NULL));
+        if (connIndex >= 0 && connIndex < connectionCount) {
+            fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"post-fix\",\"hypothesisId\":\"insert\",\"location\":\"main.c:3922\",\"message\":\"Connection info\",\"data\":{\"from\":%d,\"to\":%d},\"timestamp\":%ld}\n", connections[connIndex].fromNode, connections[connIndex].toNode, time(NULL));
+        }
+        fclose(logFile);
+    }
+    // #endregion
+    
     if (nodeCount >= MAX_NODES || connectionCount >= MAX_CONNECTIONS) {
+        // #region agent log
+        logFile = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
+        if (logFile) {
+            fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"post-fix\",\"hypothesisId\":\"insert\",\"location\":\"main.c:3923\",\"message\":\"Rejected: limits\",\"data\":{},\"timestamp\":%ld}\n", time(NULL));
+            fclose(logFile);
+        }
+        // #endregion
         return;
     }
     
@@ -3485,6 +4070,13 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
     
     // Validate that this isn't a cross-IF connection
     if (!is_valid_if_converge_connection(oldConn.fromNode, oldConn.toNode)) {
+        // #region agent log
+        logFile = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
+        if (logFile) {
+            fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"post-fix\",\"hypothesisId\":\"insert\",\"location\":\"main.c:3932\",\"message\":\"Rejected: invalid IF connection\",\"data\":{},\"timestamp\":%ld}\n", time(NULL));
+            fclose(logFile);
+        }
+        // #endregion
         return;  // Reject this operation
     }
     
@@ -3658,6 +4250,14 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
     
     int newNodeIndex = nodeCount;
     nodeCount++;
+    
+    // #region agent log
+    logFile = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
+    if (logFile) {
+        fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"post-fix\",\"hypothesisId\":\"insert\",\"location\":\"main.c:4129\",\"message\":\"Node created\",\"data\":{\"newNodeIndex\":%d,\"nodeType\":%d,\"x\":%.2f,\"y\":%.2f},\"timestamp\":%ld}\n", newNodeIndex, nodeType, newNode->x, newNode->y, time(NULL));
+        fclose(logFile);
+    }
+    // #endregion
     
     // Determine which IF block to reposition later (after push-down)
     int relevantIfBlock = -1;
@@ -4511,6 +5111,14 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
     connections[connectionCount].toNode = oldConn.toNode;
     
     connectionCount++;
+    
+    // #region agent log
+    logFile = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
+    if (logFile) {
+        fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"post-fix\",\"hypothesisId\":\"insert\",\"location\":\"main.c:4986\",\"message\":\"Connections updated\",\"data\":{\"connIndex\":%d,\"oldFrom\":%d,\"oldTo\":%d,\"newConn1\":{\"from\":%d,\"to\":%d},\"newConn2\":{\"from\":%d,\"to\":%d}},\"timestamp\":%ld}\n", connIndex, oldConn.fromNode, oldConn.toNode, connections[connIndex].fromNode, connections[connIndex].toNode, connections[connectionCount-1].fromNode, connections[connectionCount-1].toNode, time(NULL));
+        fclose(logFile);
+    }
+    // #endregion
 
     // Recalculate branch widths and positions after insertion
     update_all_branch_positions();
@@ -5388,6 +5996,89 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
     }
 }
 
+// Insert CYCLE block with paired end point in a connection
+void insert_cycle_block_in_connection(int connIndex) {
+    if (nodeCount + 2 >= MAX_NODES || connectionCount + 2 >= MAX_CONNECTIONS || cycleBlockCount >= MAX_CYCLE_BLOCKS) {
+        return;
+    }
+    
+    Connection oldConn = connections[connIndex];
+    FlowNode *from = &nodes[oldConn.fromNode];
+    FlowNode *to = &nodes[oldConn.toNode];
+    
+    double originalToY = to->y;
+    int fromGridY = world_to_grid_y(from->y);
+    
+    // Default placement (WHILE/FOR): cycle block then end point one grid below
+    int cycleGridY = fromGridY - 1;
+    int endGridY = cycleGridY - 1;
+    
+    // Create cycle block
+    int cycleNodeIndex = nodeCount;
+    FlowNode *cycleNode = &nodes[nodeCount++];
+    cycleNode->x = snap_to_grid_x(from->x);
+    cycleNode->y = snap_to_grid_y(grid_to_world_y(cycleGridY));
+    cycleNode->height = 0.26f;
+    cycleNode->width = 0.34f;
+    cycleNode->value[0] = '\0';
+    cycleNode->type = NODE_CYCLE;
+    cycleNode->branchColumn = from->branchColumn;
+    cycleNode->owningIfBlock = from->owningIfBlock;
+    
+    // Create cycle end point
+    int endNodeIndex = nodeCount;
+    FlowNode *endNode = &nodes[nodeCount++];
+    endNode->x = cycleNode->x;
+    endNode->y = snap_to_grid_y(grid_to_world_y(endGridY));
+    endNode->height = 0.12f;
+    endNode->width = 0.12f;
+    endNode->value[0] = '\0';
+    endNode->type = NODE_CYCLE_END;
+    endNode->branchColumn = from->branchColumn;
+    endNode->owningIfBlock = from->owningIfBlock;
+    
+    // Push nodes below to make room (2 grid cells)
+    double gridSpacing = GRID_CELL_SIZE * 2;
+    for (int i = 0; i < nodeCount; ++i) {
+        if (nodes[i].y <= originalToY && i != cycleNodeIndex && i != endNodeIndex) {
+            nodes[i].y -= gridSpacing;
+            nodes[i].y = snap_to_grid_y(nodes[i].y);
+        }
+    }
+    
+    // Wire connections to keep the branch intact (default WHILE/FOR order)
+    connections[connIndex].fromNode = oldConn.fromNode;
+    connections[connIndex].toNode = cycleNodeIndex;
+    
+    connections[connectionCount].fromNode = cycleNodeIndex;
+    connections[connectionCount].toNode = endNodeIndex;
+    connectionCount++;
+    
+    connections[connectionCount].fromNode = endNodeIndex;
+    connections[connectionCount].toNode = oldConn.toNode;
+    connectionCount++;
+    
+    // Register cycle metadata
+    int parentCycle = -1;
+    if (from->type == NODE_CYCLE) {
+        parentCycle = find_cycle_block_by_cycle_node(oldConn.fromNode);
+    } else {
+        parentCycle = find_cycle_block_by_end_node(oldConn.fromNode);
+    }
+    
+    CycleBlock *cycle = &cycleBlocks[cycleBlockCount];
+    cycle->cycleNodeIndex = cycleNodeIndex;
+    cycle->cycleEndNodeIndex = endNodeIndex;
+    cycle->parentCycleIndex = parentCycle;
+    cycle->cycleType = CYCLE_WHILE;
+    cycle->loopbackOffset = 0.3f * (float)((parentCycle >= 0 ? calculate_cycle_depth(parentCycle) + 1 : 1));
+    cycle->initVar[0] = '\0';
+    cycle->condition[0] = '\0';
+    cycle->increment[0] = '\0';
+    
+    cycleBlockCount++;
+}
+
 // Mouse button callback
 void mouse_button_callback(GLFWwindow* window, int button, int action, int mods) {
     (void)mods;    // Mark as intentionally unused
@@ -5460,7 +6151,7 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
             );
             
             if (filename != NULL && strlen(filename) > 0) {
-                if (export_to_code(filename, langName, nodes, nodeCount, connections, connectionCount)) {
+                if (export_to_code(filename, langName, nodes, nodeCount, (struct Connection*)connections, connectionCount)) {
                     tinyfd_messageBox("Export Success", "Flowchart exported successfully!", "ok", "info", 1);
                 } else {
                     tinyfd_messageBox("Export Error", "Failed to export flowchart. Check console for details.", "ok", "error", 1);
@@ -5509,6 +6200,8 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
                         NodeType selectedType = connectionMenuItems[clickedItem].nodeType;
                         if (selectedType == NODE_IF) {
                             insert_if_block_in_connection(popupMenu.connectionIndex);
+                        } else if (selectedType == NODE_CYCLE) {
+                            insert_cycle_block_in_connection(popupMenu.connectionIndex);
                         } else {
                             insert_node_in_connection(popupMenu.connectionIndex, selectedType);
                         }
@@ -5678,7 +6371,58 @@ void drawFlowNode(const FlowNode *n) {
         draw_block_if(n);
     } else if (n->type == NODE_CONVERGE) {
         draw_block_converge(n);
+    } else if (n->type == NODE_CYCLE) {
+        draw_block_cycle(n);
+    } else if (n->type == NODE_CYCLE_END) {
+        draw_block_cycle_end(n);
     }
+}
+
+static void draw_cycle_loopbacks(void) {
+    glLineWidth(2.5f);
+    for (int i = 0; i < cycleBlockCount; i++) {
+        const CycleBlock *cycle = &cycleBlocks[i];
+        if (cycle->cycleNodeIndex < 0 || cycle->cycleNodeIndex >= nodeCount ||
+            cycle->cycleEndNodeIndex < 0 || cycle->cycleEndNodeIndex >= nodeCount) {
+            continue;
+        }
+        const FlowNode *loopNode = &nodes[cycle->cycleNodeIndex];
+        const FlowNode *endNode = &nodes[cycle->cycleEndNodeIndex];
+        
+        // Use an orange tone for loops
+        glColor3f(0.95f, 0.6f, 0.15f);
+        
+        float offset = get_cycle_loopback_offset(i);
+        
+        // Start from the left side center of the cycle block
+        float startX = (float)(loopNode->x - loopNode->width * 0.5f);
+        float startY = (float)loopNode->y;
+        float anchorX = startX - offset;
+        
+        float targetX, targetY;
+        if (cycle->cycleType == CYCLE_DO) {
+            // DO: loopback goes downward from cycle block to end block
+            targetX = (float)endNode->x;
+            targetY = (float)(endNode->y + endNode->height * 0.5f);
+        } else {
+            // WHILE / FOR: loopback goes upward from cycle block to end block
+            targetX = (float)endNode->x;
+            targetY = (float)(endNode->y - endNode->height * 0.5f);
+        }
+        
+        glBegin(GL_LINES);
+        // Horizontal from cycle block left side center to offset
+        glVertex2f(startX, startY);
+        glVertex2f(anchorX, startY);
+        // Vertical segment
+        glVertex2f(anchorX, startY);
+        glVertex2f(anchorX, targetY);
+        // Back to end block
+        glVertex2f(anchorX, targetY);
+        glVertex2f(targetX, targetY);
+        glEnd();
+    }
+    glLineWidth(1.0f);
 }
 
 void drawFlowchart(GLFWwindow* window) {
@@ -5703,6 +6447,11 @@ void drawFlowchart(GLFWwindow* window) {
     // Draw connections as right-angle L-shapes
     glLineWidth(3.0f);
     for (int i = 0; i < connectionCount; ++i) {
+        // Skip drawing cycle loopback connections (they're drawn as bracket lines)
+        if (is_cycle_loopback(i)) {
+            continue;
+        }
+        
         const FlowNode *from = &nodes[connections[i].fromNode];
         const FlowNode *to   = &nodes[connections[i].toNode];
         
@@ -5890,6 +6639,10 @@ void drawFlowchart(GLFWwindow* window) {
             }
         }
     }
+    
+    // Draw decorative cycle loopback brackets
+    draw_cycle_loopbacks();
+    
     glLineWidth(1.0f);
 
     // Draw nodes (block labels will use scroll offsets set above)

@@ -1,10 +1,9 @@
 #include <GLFW/glfw3.h>
-#include <stdio.h>
 #include <math.h>
-#include "block_converge.h"
+#include "block_cycle_end.h"
 #include "text_renderer.h"
 
-// FlowNode structure definition (must match main.c)
+// FlowNode structure definition (must match main.c layout)
 typedef struct FlowNode {
     double x;
     double y;
@@ -16,12 +15,11 @@ typedef struct FlowNode {
     int owningIfBlock;
 } FlowNode;
 
-void draw_block_converge(const struct FlowNode *n) {
-    // Convergence point: Small gray circle
-    float radius = n->width * 0.5f;  // Use width as diameter
+void draw_block_cycle_end(const struct FlowNode *n) {
+    // Cycle end point: circular marker with same color as cycle block
+    float radius = n->width * 0.5f;
     
-    // Draw filled circle
-    glColor3f(0.6f, 0.6f, 0.6f);  // Gray
+    glColor3f(0.95f, 0.6f, 0.15f);  // Orange fill
     glBegin(GL_TRIANGLE_FAN);
     glVertex2f(n->x, n->y);
     for (int i = 0; i <= 32; ++i) {
@@ -30,8 +28,7 @@ void draw_block_converge(const struct FlowNode *n) {
     }
     glEnd();
     
-    // Border
-    glColor3f(0.2f, 0.2f, 0.2f);  // Dark gray border
+    glColor3f(0.55f, 0.3f, 0.05f); // Border
     glBegin(GL_LINE_LOOP);
     for (int i = 0; i <= 32; ++i) {
         float angle = (float)i / 32.0f * 6.2831853f;
@@ -39,13 +36,13 @@ void draw_block_converge(const struct FlowNode *n) {
     }
     glEnd();
     
-    // Draw connectors
-    float r = 0.02f;  // Smaller connector size for smaller node
+    // Connectors (top/bottom) to match converge style
+    float r = 0.02f;
     glColor3f(0.1f, 0.1f, 0.1f);
     
-    // Left input connector (for true branch)
-    float cx = (float)(n->x - radius);
-    float cy = (float)n->y;
+    // Top connector
+    float cx = (float)n->x;
+    float cy = (float)(n->y + radius);
     glBegin(GL_TRIANGLE_FAN);
     glVertex2f(cx, cy);
     for (int i = 0; i <= 20; ++i) {
@@ -54,19 +51,7 @@ void draw_block_converge(const struct FlowNode *n) {
     }
     glEnd();
     
-    // Right input connector (for false branch)
-    cx = (float)(n->x + radius);
-    cy = (float)n->y;
-    glBegin(GL_TRIANGLE_FAN);
-    glVertex2f(cx, cy);
-    for (int i = 0; i <= 20; ++i) {
-        float a = (float)i / 20.0f * 6.2831853f;
-        glVertex2f(cx + cosf(a) * r, cy + sinf(a) * r);
-    }
-    glEnd();
-    
-    // Bottom output connector
-    cx = (float)n->x;
+    // Bottom connector
     cy = (float)(n->y - radius);
     glBegin(GL_TRIANGLE_FAN);
     glVertex2f(cx, cy);
@@ -76,10 +61,4 @@ void draw_block_converge(const struct FlowNode *n) {
     }
     glEnd();
 }
-
-
-
-
-
-
 

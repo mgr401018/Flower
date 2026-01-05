@@ -26,6 +26,8 @@ SRCS = main.c \
        $(SRC_DIR)/block_declare.c \
        $(SRC_DIR)/block_if.c \
        $(SRC_DIR)/block_converge.c \
+       $(SRC_DIR)/block_cycle.c \
+       $(SRC_DIR)/block_cycle_end.c \
        $(SRC_DIR)/code_exporter.c
 
 # Object files (in build directory)
