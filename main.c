@@ -6259,11 +6259,17 @@ void insert_cycle_block_in_connection(int connIndex) {
     int cycleGridY = fromGridY - 1;
     int endGridY = cycleGridY - 1;
     
+    // #region agent log
+    snprintf(logBuf, sizeof(logBuf), "{\"fromGridY\":%d,\"cycleGridY\":%d,\"endGridY\":%d}", fromGridY, cycleGridY, endGridY);
+    debug_log("main.c:6258", "cycle grid Y calculation", "CYCLE_POS", logBuf);
+    // #endregion
+    
     // Create cycle block
     int cycleNodeIndex = nodeCount;
     FlowNode *cycleNode = &nodes[nodeCount++];
     cycleNode->x = snap_to_grid_x(targetX);  // Use calculated branch position
-    cycleNode->y = snap_to_grid_y(grid_to_world_y(cycleGridY));
+    double cycleWorldY = grid_to_world_y(cycleGridY);
+    cycleNode->y = snap_to_grid_y(cycleWorldY);
     cycleNode->height = 0.26f;
     cycleNode->width = 0.34f;
     cycleNode->value[0] = '\0';
@@ -6272,7 +6278,7 @@ void insert_cycle_block_in_connection(int connIndex) {
     cycleNode->owningIfBlock = cycleOwningIfBlock;
     
     // #region agent log
-    snprintf(logBuf, sizeof(logBuf), "{\"cycleNodeIndex\":%d,\"cycleX\":%.3f,\"cycleY\":%.3f,\"cycleBranchColumn\":%d,\"cycleOwningIfBlock\":%d}", cycleNodeIndex, cycleNode->x, cycleNode->y, cycleNode->branchColumn, cycleNode->owningIfBlock);
+    snprintf(logBuf, sizeof(logBuf), "{\"cycleNodeIndex\":%d,\"cycleX\":%.3f,\"cycleY\":%.3f,\"cycleWorldY\":%.3f,\"cycleBranchColumn\":%d,\"cycleOwningIfBlock\":%d}", cycleNodeIndex, cycleNode->x, cycleNode->y, cycleWorldY, cycleNode->branchColumn, cycleNode->owningIfBlock);
     debug_log("main.c:6100", "cycle node created", "H1,H3", logBuf);
     // #endregion
     
@@ -6280,13 +6286,44 @@ void insert_cycle_block_in_connection(int connIndex) {
     int endNodeIndex = nodeCount;
     FlowNode *endNode = &nodes[nodeCount++];
     endNode->x = cycleNode->x;
-    endNode->y = snap_to_grid_y(grid_to_world_y(endGridY));
+    double endWorldY = grid_to_world_y(endGridY);
+    endNode->y = snap_to_grid_y(endWorldY);
+    
+    // #region agent log
+    snprintf(logBuf, sizeof(logBuf), "{\"endNodeIndex\":%d,\"endWorldY\":%.3f,\"endY\":%.3f,\"cycleY\":%.3f,\"yDiff\":%.3f}", endNodeIndex, endWorldY, endNode->y, cycleNode->y, endNode->y - cycleNode->y);
+    debug_log("main.c:6283", "end node Y calculation", "CYCLE_POS", logBuf);
+    // #endregion
     endNode->height = 0.12f;
     endNode->width = 0.12f;
     endNode->value[0] = '\0';
     endNode->type = NODE_CYCLE_END;
     endNode->branchColumn = targetBranchColumn;  // Use calculated branch column
     endNode->owningIfBlock = cycleOwningIfBlock;
+    
+    // CRITICAL FIX: Ensure end point is always below cycle block (at least one grid cell)
+    // This prevents them from being on top of each other
+    // In this coordinate system, Y decreases downward (more negative = lower)
+    // So end should be MORE negative (lower) than cycle
+    double minEndY = cycleNode->y - GRID_CELL_SIZE;  // End should be at least one grid cell below cycle
+    int cycleGridYAfterSnap = world_to_grid_y(cycleNode->y);
+    int endGridYAfterSnap = world_to_grid_y(endNode->y);
+    
+    // #region agent log
+    snprintf(logBuf, sizeof(logBuf), "{\"cycleGridYAfterSnap\":%d,\"endGridYAfterSnap\":%d,\"cycleY\":%.3f,\"endY\":%.3f,\"minEndY\":%.3f}", cycleGridYAfterSnap, endGridYAfterSnap, cycleNode->y, endNode->y, minEndY);
+    debug_log("main.c:6305", "checking cycle/end spacing", "CYCLE_POS", logBuf);
+    // #endregion
+    
+    // Check if they're in the same grid cell or end is too close
+    if (endGridYAfterSnap >= cycleGridYAfterSnap) {
+        // End is at same or higher grid cell - force it to be one grid cell below
+        int requiredEndGridY = cycleGridYAfterSnap - 1;
+        endNode->y = snap_to_grid_y(grid_to_world_y(requiredEndGridY));
+        
+        // #region agent log
+        snprintf(logBuf, sizeof(logBuf), "{\"requiredEndGridY\":%d,\"newEndY\":%.3f}", requiredEndGridY, endNode->y);
+        debug_log("main.c:6315", "forced end below cycle", "CYCLE_POS", logBuf);
+        // #endregion
+    }
     
     // CRITICAL FIX: If cycle is in a nested IF branch, ensure end point is above convergence
     // Check if the cycle is in a nested IF (one that has a parent)
@@ -6297,10 +6334,26 @@ void insert_cycle_block_in_connection(int connIndex) {
             int nestedConvergeIdx = ifBlocks[cycleOwningIfBlock].convergeNodeIndex;
             if (nestedConvergeIdx >= 0 && nestedConvergeIdx < nodeCount) {
                 double convergeY = nodes[nestedConvergeIdx].y;
+                int convergeGridY = world_to_grid_y(convergeY);
+                int currentEndGridY = world_to_grid_y(endNode->y);
+                
                 // Ensure cycle end point is above convergence (convergeY is more negative, so endY should be less negative)
-                if (endNode->y <= convergeY) {  // endNode->y is less negative or equal, meaning it's at or below convergence
-                    // Position end point above convergence with spacing
-                    endNode->y = snap_to_grid_y(convergeY + GRID_CELL_SIZE);
+                // But also ensure it's still below the cycle block
+                if (currentEndGridY <= convergeGridY) {
+                    // End is at or below convergence - position it above convergence with spacing
+                    int requiredEndGridY = convergeGridY + 1;  // One grid cell above convergence
+                    // But ensure it's still below the cycle block
+                    int cycleGridY = world_to_grid_y(cycleNode->y);
+                    if (requiredEndGridY >= cycleGridY) {
+                        // Can't be above convergence and below cycle - prioritize being below cycle
+                        requiredEndGridY = cycleGridY - 1;
+                    }
+                    endNode->y = snap_to_grid_y(grid_to_world_y(requiredEndGridY));
+                    
+                    // #region agent log
+                    snprintf(logBuf, sizeof(logBuf), "{\"convergeGridY\":%d,\"requiredEndGridY\":%d,\"newEndY\":%.3f}", convergeGridY, requiredEndGridY, endNode->y);
+                    debug_log("main.c:6335", "adjusted end for nested IF convergence", "CYCLE_POS", logBuf);
+                    // #endregion
                 }
             }
         }
@@ -6346,7 +6399,38 @@ void insert_cycle_block_in_connection(int connIndex) {
     } else if (from->owningIfBlock >= 0 && from->owningIfBlock < ifBlockCount) {
         // Inserting from a node that's already in a branch
         int relevantIfBlock = from->owningIfBlock;
+        
+        // CRITICAL FIX: For nested IFs, check which branch array the from node is actually in
+        // This is especially important for nested IF branches where branchColumn might be 0
         bool addToTrueBranch = (from->branchColumn < 0);
+        
+        // Check if from node is actually in a branch array to determine correct branch
+        if (from->branchColumn == 0 && from->owningIfBlock >= 0 && from->owningIfBlock < ifBlockCount) {
+            // Check which branch array the from node is actually in
+            bool foundInTrueBranch = false;
+            bool foundInFalseBranch = false;
+            
+            for (int i = 0; i < ifBlocks[relevantIfBlock].trueBranchCount; i++) {
+                if (ifBlocks[relevantIfBlock].trueBranchNodes[i] == oldConn.fromNode) {
+                    foundInTrueBranch = true;
+                    break;
+                }
+            }
+            if (!foundInTrueBranch) {
+                for (int i = 0; i < ifBlocks[relevantIfBlock].falseBranchCount; i++) {
+                    if (ifBlocks[relevantIfBlock].falseBranchNodes[i] == oldConn.fromNode) {
+                        foundInFalseBranch = true;
+                        break;
+                    }
+                }
+            }
+            
+            if (foundInTrueBranch) {
+                addToTrueBranch = true;
+            } else if (foundInFalseBranch) {
+                addToTrueBranch = false;
+            }
+        }
         
         if (addToTrueBranch) {
             // Add to true branch
