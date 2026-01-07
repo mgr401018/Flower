@@ -1244,6 +1244,43 @@ void load_flowchart(const char* filename) {
         reposition_convergence_point(i, false);  // Don't push nodes below when loading
     }
     
+    // Final pass: ensure all branchColumn values are correct after all updates
+    // This is critical for connection shapes to render correctly
+    for (int i = 0; i < ifBlockCount; i++) {
+        // Update true branch nodes
+        for (int j = 0; j < ifBlocks[i].trueBranchCount; j++) {
+            int nodeIdx = ifBlocks[i].trueBranchNodes[j];
+            if (nodeIdx >= 0 && nodeIdx < nodeCount) {
+                nodes[nodeIdx].branchColumn = ifBlocks[i].branchColumn - 2;
+                nodes[nodeIdx].owningIfBlock = i;
+            }
+        }
+        
+        // Update false branch nodes
+        for (int j = 0; j < ifBlocks[i].falseBranchCount; j++) {
+            int nodeIdx = ifBlocks[i].falseBranchNodes[j];
+            if (nodeIdx >= 0 && nodeIdx < nodeCount) {
+                int falseBranchCol = ifBlocks[i].branchColumn + 2;
+                if (falseBranchCol <= 0) {
+                    falseBranchCol = abs(ifBlocks[i].branchColumn) + 2;
+                }
+                nodes[nodeIdx].branchColumn = falseBranchCol;
+                nodes[nodeIdx].owningIfBlock = i;
+            }
+        }
+        
+        // Ensure IF and convergence nodes have correct branchColumn
+        if (ifBlocks[i].ifNodeIndex >= 0 && ifBlocks[i].ifNodeIndex < nodeCount) {
+            nodes[ifBlocks[i].ifNodeIndex].branchColumn = ifBlocks[i].branchColumn;
+        }
+        if (ifBlocks[i].convergeNodeIndex >= 0 && ifBlocks[i].convergeNodeIndex < nodeCount) {
+            nodes[ifBlocks[i].convergeNodeIndex].branchColumn = ifBlocks[i].branchColumn;
+        }
+    }
+    
+    // One final update to ensure all positions are correct
+    update_all_branch_positions();
+    
     // Fix nodes below nested IF convergence points
     for (int i = 0; i < ifBlockCount; i++) {
         if (ifBlocks[i].parentIfIndex >= 0 && ifBlocks[i].convergeNodeIndex >= 0 && 
@@ -6251,6 +6288,24 @@ void insert_cycle_block_in_connection(int connIndex) {
     endNode->branchColumn = targetBranchColumn;  // Use calculated branch column
     endNode->owningIfBlock = cycleOwningIfBlock;
     
+    // CRITICAL FIX: If cycle is in a nested IF branch, ensure end point is above convergence
+    // Check if the cycle is in a nested IF (one that has a parent)
+    if (cycleOwningIfBlock >= 0 && cycleOwningIfBlock < ifBlockCount) {
+        int nestedIfParentIdx = ifBlocks[cycleOwningIfBlock].parentIfIndex;
+        if (nestedIfParentIdx >= 0 && nestedIfParentIdx < ifBlockCount) {
+            // This is a nested IF - check its convergence point
+            int nestedConvergeIdx = ifBlocks[cycleOwningIfBlock].convergeNodeIndex;
+            if (nestedConvergeIdx >= 0 && nestedConvergeIdx < nodeCount) {
+                double convergeY = nodes[nestedConvergeIdx].y;
+                // Ensure cycle end point is above convergence (convergeY is more negative, so endY should be less negative)
+                if (endNode->y <= convergeY) {  // endNode->y is less negative or equal, meaning it's at or below convergence
+                    // Position end point above convergence with spacing
+                    endNode->y = snap_to_grid_y(convergeY + GRID_CELL_SIZE);
+                }
+            }
+        }
+    }
+    
     // Add cycle nodes to IF branch arrays (similar to insert_node_in_connection)
     bool cycleAddedToBranch = false;
     if (from->type == NODE_IF) {
@@ -6260,8 +6315,11 @@ void insert_cycle_block_in_connection(int connIndex) {
                 int resolvedBranchType = (branchType >= 0) ? branchType : get_if_branch_type(connIndex);
                 if (resolvedBranchType == 0) {
                     // True branch (left)
-                    if (ifBlocks[i].trueBranchCount < MAX_NODES) {
+                    if (ifBlocks[i].trueBranchCount + 1 < MAX_NODES) {  // Need space for both cycle and end nodes
                         ifBlocks[i].trueBranchNodes[ifBlocks[i].trueBranchCount] = cycleNodeIndex;
+                        ifBlocks[i].trueBranchCount++;
+                        // Also add end node to branch array so it's counted in depth calculation
+                        ifBlocks[i].trueBranchNodes[ifBlocks[i].trueBranchCount] = endNodeIndex;
                         ifBlocks[i].trueBranchCount++;
                         cycleNode->owningIfBlock = i;
                         endNode->owningIfBlock = i;
@@ -6270,8 +6328,11 @@ void insert_cycle_block_in_connection(int connIndex) {
                     }
                 } else if (resolvedBranchType == 1) {
                     // False branch (right)
-                    if (ifBlocks[i].falseBranchCount < MAX_NODES) {
+                    if (ifBlocks[i].falseBranchCount + 1 < MAX_NODES) {  // Need space for both cycle and end nodes
                         ifBlocks[i].falseBranchNodes[ifBlocks[i].falseBranchCount] = cycleNodeIndex;
+                        ifBlocks[i].falseBranchCount++;
+                        // Also add end node to branch array so it's counted in depth calculation
+                        ifBlocks[i].falseBranchNodes[ifBlocks[i].falseBranchCount] = endNodeIndex;
                         ifBlocks[i].falseBranchCount++;
                         cycleNode->owningIfBlock = i;
                         endNode->owningIfBlock = i;
@@ -6289,8 +6350,11 @@ void insert_cycle_block_in_connection(int connIndex) {
         
         if (addToTrueBranch) {
             // Add to true branch
-            if (ifBlocks[relevantIfBlock].trueBranchCount < MAX_NODES) {
+            if (ifBlocks[relevantIfBlock].trueBranchCount + 1 < MAX_NODES) {  // Need space for both cycle and end nodes
                 ifBlocks[relevantIfBlock].trueBranchNodes[ifBlocks[relevantIfBlock].trueBranchCount] = cycleNodeIndex;
+                ifBlocks[relevantIfBlock].trueBranchCount++;
+                // Also add end node to branch array so it's counted in depth calculation
+                ifBlocks[relevantIfBlock].trueBranchNodes[ifBlocks[relevantIfBlock].trueBranchCount] = endNodeIndex;
                 ifBlocks[relevantIfBlock].trueBranchCount++;
                 cycleNode->owningIfBlock = relevantIfBlock;
                 endNode->owningIfBlock = relevantIfBlock;
@@ -6299,8 +6363,11 @@ void insert_cycle_block_in_connection(int connIndex) {
             }
         } else if (from->branchColumn > 0) {
             // Add to false branch
-            if (ifBlocks[relevantIfBlock].falseBranchCount < MAX_NODES) {
+            if (ifBlocks[relevantIfBlock].falseBranchCount + 1 < MAX_NODES) {  // Need space for both cycle and end nodes
                 ifBlocks[relevantIfBlock].falseBranchNodes[ifBlocks[relevantIfBlock].falseBranchCount] = cycleNodeIndex;
+                ifBlocks[relevantIfBlock].falseBranchCount++;
+                // Also add end node to branch array so it's counted in depth calculation
+                ifBlocks[relevantIfBlock].falseBranchNodes[ifBlocks[relevantIfBlock].falseBranchCount] = endNodeIndex;
                 ifBlocks[relevantIfBlock].falseBranchCount++;
                 cycleNode->owningIfBlock = relevantIfBlock;
                 endNode->owningIfBlock = relevantIfBlock;
@@ -6371,6 +6438,23 @@ void insert_cycle_block_in_connection(int connIndex) {
     cycle->increment[0] = '\0';
     
     cycleBlockCount++;
+    
+    // Reposition convergence points for IF blocks that contain the cycle
+    // Similar to insert_node_in_connection, we need to reposition the IF's convergence
+    // to account for the two new nodes (cycle block and end point) added to the branch
+    if (cycleAddedToBranch && cycleOwningIfBlock >= 0 && cycleOwningIfBlock < ifBlockCount) {
+        // Reposition the IF block's convergence point to account for the cycle
+        reposition_convergence_point(cycleOwningIfBlock, true);
+        
+        // If this is a nested IF, also reposition its parent IF
+        int parentIfIdx = ifBlocks[cycleOwningIfBlock].parentIfIndex;
+        if (parentIfIdx >= 0 && parentIfIdx < ifBlockCount) {
+            reposition_convergence_point(parentIfIdx, true);
+        }
+    }
+    
+    // Recalculate branch widths and positions after insertion
+    update_all_branch_positions();
     
     // #region agent log
     snprintf(logBuf, sizeof(logBuf), "{\"cycleNodeIndex\":%d,\"finalCycleX\":%.3f,\"finalEndX\":%.3f}", cycleNodeIndex, cycleNode->x, endNode->x);
@@ -6503,10 +6587,6 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
                             insert_cycle_block_in_connection(popupMenu.connectionIndex);
                             // #region agent log
                             debug_log("main.c:6390", "after insert_cycle_block_in_connection", "H4", "{}");
-                            // #endregion
-                            update_all_branch_positions();
-                            // #region agent log
-                            debug_log("main.c:6393", "after update_all_branch_positions", "H4", "{}");
                             // #endregion
                         } else {
                             insert_node_in_connection(popupMenu.connectionIndex, selectedType);
