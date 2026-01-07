@@ -3899,6 +3899,62 @@ void edit_node_value(int nodeIndex) {
                 connections[nextConn].fromNode = cycleNodeIndex;
                 connections[nextConn].toNode = nextTarget;
             }
+            
+            // CRITICAL FIX: Ensure body entry connection exists (end -> first body node)
+            // After rewiring, we need to make sure there's a connection FROM end to the first body node
+            // This is the connection where blocks are placed
+            bool hasBodyEntryConnection = false;
+            int bodyEntryConn = -1;
+            for (int i = 0; i < connectionCount; i++) {
+                if (connections[i].fromNode == endNodeIndex && 
+                    connections[i].toNode != cycleNodeIndex && 
+                    connections[i].toNode != nextTarget &&
+                    isBodyNode[connections[i].toNode]) {
+                    hasBodyEntryConnection = true;
+                    bodyEntryConn = i;
+                    break;
+                }
+            }
+            // If no body entry connection exists, create one to the first body node
+            // Also check if firstBodyNode was found - if not, find it from current connections
+            if (firstBodyNode < 0) {
+                // Find first body node from current connections (after rewiring)
+                for (int i = 0; i < connectionCount; i++) {
+                    if (connections[i].fromNode == endNodeIndex && 
+                        connections[i].toNode != cycleNodeIndex && 
+                        connections[i].toNode != nextTarget &&
+                        isBodyNode[connections[i].toNode]) {
+                        firstBodyNode = connections[i].toNode;
+                        break;
+                    }
+                }
+            }
+            if (!hasBodyEntryConnection && firstBodyNode >= 0 && connectionCount < MAX_CONNECTIONS) {
+                connections[connectionCount].fromNode = endNodeIndex;
+                connections[connectionCount].toNode = firstBodyNode;
+                connectionCount++;
+            }
+            // SPECIAL CASE: Empty loop (no body nodes)
+            // For empty DO loops, we need a connection FROM end where blocks can be placed
+            // This connection goes to the cycle node as a placeholder
+            // When blocks are added, they'll be inserted in this connection
+            if (!hasBodyEntryConnection && firstBodyNode < 0 && connectionCount < MAX_CONNECTIONS) {
+                // Check if there's already a connection end -> cycle (shouldn't exist, but check anyway)
+                bool hasEndToCycle = false;
+                for (int i = 0; i < connectionCount; i++) {
+                    if (connections[i].fromNode == endNodeIndex && connections[i].toNode == cycleNodeIndex) {
+                        hasEndToCycle = true;
+                        break;
+                    }
+                }
+                // Create end -> cycle connection as body entry point for empty loops
+                // Note: This is different from the loopback (cycle -> end)
+                if (!hasEndToCycle) {
+                    connections[connectionCount].fromNode = endNodeIndex;
+                    connections[connectionCount].toNode = cycleNodeIndex;
+                    connectionCount++;
+                }
+            }
         } else {
             // Positions already swapped above, now rewire connections
             // Rewire: parent -> cycle, cycle -> end, end -> next
@@ -3939,7 +3995,7 @@ void edit_node_value(int nodeIndex) {
             const char* initDefault = cycle->initVar[0] ? cycle->initVar : "i = 0";
             const char* initResult = tinyfd_inputBox(
                 "For Init",
-                "Initialize loop variable (e.g., int i = 0 or i = 0):",
+                "Initialize loop variable (e.g., int i = 0, i = 0, or just 'i' to auto-initialize):",
                 initDefault
             );
             if (!initResult || initResult[0] == '\0') return;
@@ -3948,6 +4004,34 @@ void edit_node_value(int nodeIndex) {
             char initVarCopy[MAX_VALUE_LENGTH];
             strncpy(initVarCopy, initResult, sizeof(initVarCopy) - 1);
             initVarCopy[sizeof(initVarCopy) - 1] = '\0';
+            
+            // Auto-initialization: if input is just a variable name (no '=' and no type keywords), add "int " prefix and " = 0" suffix
+            const char* typeKeywords[] = {"int", "float", "double", "char", "bool", "long", "short", "unsigned"};
+            bool hasTypeKeyword = false;
+            bool hasEquals = (strchr(initVarCopy, '=') != NULL);
+            
+            // Check if starts with a type keyword
+            char trimmed[MAX_VALUE_LENGTH];
+            const char* p = initVarCopy;
+            while (*p == ' ' || *p == '\t') p++;
+            int trimmedLen = 0;
+            while (*p != '\0' && *p != ' ' && *p != '\t' && *p != '=' && trimmedLen < MAX_VALUE_LENGTH - 1) {
+                trimmed[trimmedLen++] = *p++;
+            }
+            trimmed[trimmedLen] = '\0';
+            
+            for (int i = 0; i < 8; i++) {
+                if (strncmp(trimmed, typeKeywords[i], strlen(typeKeywords[i])) == 0 && 
+                    (trimmed[strlen(typeKeywords[i])] == '\0' || trimmed[strlen(typeKeywords[i])] == ' ' || trimmed[strlen(typeKeywords[i])] == '\t')) {
+                    hasTypeKeyword = true;
+                    break;
+                }
+            }
+            
+            // If no '=' and no type keyword, it's just a variable name - auto-initialize
+            if (!hasEquals && !hasTypeKeyword && trimmedLen > 0 && is_valid_variable_name(trimmed)) {
+                snprintf(initVarCopy, sizeof(initVarCopy), "int %s = 0", trimmed);
+            }
             
             const char* condDefault = cycle->condition[0] ? cycle->condition : "i < 10";
             const char* condResult = tinyfd_inputBox(
@@ -3985,18 +4069,41 @@ void edit_node_value(int nodeIndex) {
             strncpy(cycle->increment, incrCopy, sizeof(cycle->increment) - 1);
             cycle->increment[sizeof(cycle->increment) - 1] = '\0';
             
-            // Try to capture init variable name for variable table (best effort)
+            // Extract variable name from init expression (improved parsing)
+            // Handles: "int i = 0", "i = 0", "int i", etc.
             char varName[MAX_VAR_NAME_LENGTH];
-            int pos = 0;
-            const char* p = cycle->initVar;
+            varName[0] = '\0';
+            p = cycle->initVar;
+            
+            // Skip whitespace
             while (*p == ' ' || *p == '\t') p++;
-            while ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || *p == '_' || (*p >= '0' && *p <= '9')) {
-                if (pos < MAX_VAR_NAME_LENGTH - 1) {
-                    varName[pos++] = *p;
+            
+            // Skip type keyword if present
+            for (int i = 0; i < 8; i++) {
+                int typeLen = strlen(typeKeywords[i]);
+                if (strncmp(p, typeKeywords[i], typeLen) == 0 && 
+                    (p[typeLen] == ' ' || p[typeLen] == '\t' || p[typeLen] == '\0')) {
+                    p += typeLen;
+                    while (*p == ' ' || *p == '\t') p++;
+                    break;
                 }
-                p++;
+            }
+            
+            // Extract variable name (identifier)
+            int pos = 0;
+            if ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || *p == '_') {
+                // Valid start character for identifier
+                while ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || 
+                       (*p >= '0' && *p <= '9') || *p == '_') {
+                    if (pos < MAX_VAR_NAME_LENGTH - 1) {
+                        varName[pos++] = *p;
+                    }
+                    p++;
+                }
             }
             varName[pos] = '\0';
+            
+            // Add to variable table if valid and doesn't exist
             if (pos > 0 && is_valid_variable_name(varName) && !variable_name_exists(varName, -1) && variableCount < MAX_VARIABLES) {
                 Variable *v = &variables[variableCount++];
                 strncpy(v->name, varName, MAX_VAR_NAME_LENGTH - 1);
