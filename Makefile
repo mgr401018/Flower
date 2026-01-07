@@ -5,7 +5,13 @@ CC = gcc
 CFLAGS = -Wall -Wextra -O2 -Isrc -Iimports
 
 # Detect operating system
-UNAME_S := $(shell uname -s)
+# Detect operating system
+ifeq ($(OS),Windows_NT)
+    UNAME_S := Windows
+else
+    UNAME_S := $(shell uname -s)
+endif
+
 
 # Directories
 SRC_DIR = src
@@ -37,13 +43,17 @@ OBJS = $(SRCS:%.c=$(BUILD_DIR)/%.o)
 ifeq ($(UNAME_S),Linux)
     LIBS = -lglfw -lGL -lm
 endif
+
 ifeq ($(UNAME_S),Darwin)
     LIBS = -lglfw -framework OpenGL -framework Cocoa -framework IOKit
 endif
-ifeq ($(OS),Windows_NT)
+
+ifeq ($(UNAME_S),Windows)
     TARGET = triangle.exe
-    LIBS = -lglfw3 -lopengl32 -lgdi32
+    #LIBS = -lglfw3 -lopengl32 -lgdi32
+    LIBS = -lglfw3 -lopengl32 -lgdi32 -lole32 -lcomdlg32 -loleaut32
 endif
+
 
 # Default target
 all: $(BUILD_DIR)/$(TARGET)
