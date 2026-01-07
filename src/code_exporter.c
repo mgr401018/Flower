@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <time.h>
 #include "code_exporter.h"
 
 // Define FlowNode and Connection structures (must match main.c)
@@ -909,6 +910,25 @@ static int export_node_recursive(FILE* file, int nodeIdx, FlowNode* nodes, int n
             if (strncmp(typeBuf, "DO", 2) == 0) loopType = 'D';
             else if (strncmp(typeBuf, "FOR", 3) == 0) loopType = 'F';
             
+            // For DO loops, if we've already been visited, skip (processed from cycle_end)
+            if (loopType == 'D' && visited[nodeIdx]) {
+                // Find exit node and continue
+                int cycleEndNode = find_cycle_end(nodeIdx, nodes, nodeCount, connections, connectionCount);
+                if (cycleEndNode >= 0 && cycleEndNode < nodeCount) {
+                    int exitNode = find_next_node(cycleEndNode, connections, connectionCount);
+                    if (exitNode == nodeIdx) {
+                        for (int i = 0; i < connectionCount; i++) {
+                            if (connections[i].fromNode == cycleEndNode && connections[i].toNode != nodeIdx) {
+                                exitNode = connections[i].toNode;
+                                break;
+                            }
+                        }
+                    }
+                    return exitNode;
+                }
+                return find_next_node(nodeIdx, connections, connectionCount);
+            }
+            
             // Find cycle_end
             int cycleEndNode = find_cycle_end(nodeIdx, nodes, nodeCount, connections, connectionCount);
             
@@ -938,41 +958,57 @@ static int export_node_recursive(FILE* file, int nodeIdx, FlowNode* nodes, int n
             }
             (*indentLevel)++;
             
-            // Find loop body start (first node connected from cycle that's not cycle_end)
+            // Find loop body start
+            // For DO loops: body entry is FROM cycle_end (end -> body -> cycle)
+            // For WHILE/FOR loops: body entry is FROM cycle (cycle -> body -> end)
             int bodyStart = -1;
             int outNodes[10];
             int outCount = 0;
-            find_connections_from(nodeIdx, connections, connectionCount, outNodes, &outCount, 10);
             
-            for (int i = 0; i < outCount; i++) {
-                if (outNodes[i] != cycleEndNode && outNodes[i] >= 0 && outNodes[i] < nodeCount) {
-                    bodyStart = outNodes[i];
-                    break;
+            if (loopType == 'D') {
+                // DO: find body start from cycle_end
+                find_connections_from(cycleEndNode, connections, connectionCount, outNodes, &outCount, 10);
+                for (int i = 0; i < outCount; i++) {
+                    if (outNodes[i] != nodeIdx && outNodes[i] >= 0 && outNodes[i] < nodeCount) {
+                        bodyStart = outNodes[i];
+                        break;
+                    }
+                }
+            } else {
+                // WHILE/FOR: find body start from cycle
+                find_connections_from(nodeIdx, connections, connectionCount, outNodes, &outCount, 10);
+                for (int i = 0; i < outCount; i++) {
+                    if (outNodes[i] != cycleEndNode && outNodes[i] >= 0 && outNodes[i] < nodeCount) {
+                        bodyStart = outNodes[i];
+                        break;
+                    }
                 }
             }
             
             // Export loop body
             if (bodyStart >= 0) {
-                // Mark cycle_end as visited to prevent it from being processed during body traversal
-                bool cycleEndWasVisited = (cycleEndNode >= 0 && cycleEndNode < nodeCount) ? visited[cycleEndNode] : false;
-                if (cycleEndNode >= 0 && cycleEndNode < nodeCount) {
-                    visited[cycleEndNode] = true;
+                // For DO loops: body exits to cycle (at bottom), so mark cycle as visited
+                // For WHILE/FOR loops: body exits to cycle_end, so mark cycle_end as visited
+                int bodyExitNode = (loopType == 'D') ? nodeIdx : cycleEndNode;
+                bool bodyExitWasVisited = (bodyExitNode >= 0 && bodyExitNode < nodeCount) ? visited[bodyExitNode] : false;
+                if (bodyExitNode >= 0 && bodyExitNode < nodeCount) {
+                    visited[bodyExitNode] = true;
                 }
                 
                 int nextNode = bodyStart;
                 int loopIterations = 0;
                 const int MAX_LOOP_ITERATIONS = 100; // Prevent infinite loops
-                while (nextNode >= 0 && nextNode != cycleEndNode && nextNode < nodeCount && loopIterations < MAX_LOOP_ITERATIONS) {
+                while (nextNode >= 0 && nextNode != bodyExitNode && nextNode < nodeCount && loopIterations < MAX_LOOP_ITERATIONS) {
                     loopIterations++;
                     
-                    // Stop if we're about to process the cycle_end node
-                    if (nextNode == cycleEndNode) {
+                    // Stop if we're about to process the body exit node
+                    if (nextNode == bodyExitNode) {
                         break;
                     }
                     
-                    // Check if we've already visited this node (except for cycle node which we allow revisiting)
+                    // Check if we've already visited this node (except for cycle/cycle_end which we allow revisiting)
                     if (visited[nextNode] && nextNode != nodeIdx && nextNode != cycleEndNode) {
-                        // Check if this node connects back to cycle (loopback)
+                        // Check if this node connects back to cycle or cycle_end (loopback)
                         bool connectsToCycle = false;
                         for (int i = 0; i < connectionCount; i++) {
                             if (connections[i].fromNode == nextNode && connections[i].toNode == nodeIdx) {
@@ -996,15 +1032,15 @@ static int export_node_recursive(FILE* file, int nodeIdx, FlowNode* nodes, int n
                     if (nextNode == prevNext || nextNode == -1) break;
                     // If we loop back to cycle, we're done with the body
                     if (nextNode == nodeIdx) break;
-                    // If we reached cycle_end, stop
-                    if (nextNode == cycleEndNode) {
+                    // If we reached the body exit node, stop
+                    if (nextNode == bodyExitNode) {
                         break;
                     }
                 }
                 
-                // Restore cycle_end visited state (it will be handled after the loop closes)
-                if (cycleEndNode >= 0 && cycleEndNode < nodeCount) {
-                    visited[cycleEndNode] = cycleEndWasVisited;
+                // Restore body exit node visited state (it will be handled after the loop closes)
+                if (bodyExitNode >= 0 && bodyExitNode < nodeCount) {
+                    visited[bodyExitNode] = bodyExitWasVisited;
                 }
             }
             
@@ -1040,11 +1076,204 @@ static int export_node_recursive(FILE* file, int nodeIdx, FlowNode* nodes, int n
             break;
         }
         
-        case NODE_CYCLE_END:
-            // Should be handled within CYCLE case
-            // If we reach here, it means we're outside a loop context - just continue to next node
-            // Don't process it, just skip to the node after it
+        case NODE_CYCLE_END: {
+            // #region agent log
+            FILE* logFile = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
+            if (logFile) {
+                fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"B\",\"location\":\"code_exporter.c:1079\",\"message\":\"Encountered NODE_CYCLE_END\",\"data\":{\"nodeIdx\":%d,\"visited\":%d},\"timestamp\":%ld}\n", nodeIdx, visited[nodeIdx] ? 1 : 0, (long)time(NULL));
+                fclose(logFile);
+            }
+            // #endregion
+            
+            // Check if this cycle_end belongs to a DO loop
+            // For DO loops, cycle_end is on top and should be processed first
+            // Find the corresponding cycle node
+            // For DO loops: cycle -> cycle_end (loopback), cycle_end -> body -> cycle
+            // So we need to check both FROM and TO connections
+            int cycleNode = -1;
+            
+            // First, check connections FROM cycle_end (end -> body -> cycle)
+            for (int i = 0; i < connectionCount; i++) {
+                if (connections[i].fromNode == nodeIdx) {
+                    int target = connections[i].toNode;
+                    if (target >= 0 && target < nodeCount && nodes[target].type == NODE_CYCLE) {
+                        // Check if this is a DO loop by parsing the cycle value
+                        char typeBuf[MAX_VAR_NAME_LENGTH];
+                        char condBuf[MAX_VALUE_LENGTH];
+                        char initBuf[MAX_VALUE_LENGTH];
+                        char incrBuf[MAX_VALUE_LENGTH];
+                        parse_cycle_value(nodes[target].value, typeBuf, condBuf, initBuf, incrBuf);
+                        if (strncmp(typeBuf, "DO", 2) == 0) {
+                            cycleNode = target;
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            // Also check connections TO cycle_end (cycle -> end for loopback)
+            if (cycleNode < 0) {
+                for (int i = 0; i < connectionCount; i++) {
+                    if (connections[i].toNode == nodeIdx) {
+                        int source = connections[i].fromNode;
+                        if (source >= 0 && source < nodeCount && nodes[source].type == NODE_CYCLE) {
+                            // Check if this is a DO loop by parsing the cycle value
+                            char typeBuf[MAX_VAR_NAME_LENGTH];
+                            char condBuf[MAX_VALUE_LENGTH];
+                            char initBuf[MAX_VALUE_LENGTH];
+                            char incrBuf[MAX_VALUE_LENGTH];
+                            parse_cycle_value(nodes[source].value, typeBuf, condBuf, initBuf, incrBuf);
+                            if (strncmp(typeBuf, "DO", 2) == 0) {
+                                cycleNode = source;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // #region agent log
+            logFile = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
+            if (logFile) {
+                fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"B\",\"location\":\"code_exporter.c:1100\",\"message\":\"Cycle node search result\",\"data\":{\"cycleNode\":%d,\"cycleEndIdx\":%d},\"timestamp\":%ld}\n", cycleNode, nodeIdx, (long)time(NULL));
+                // Log all connections involving this cycle_end
+                for (int i = 0; i < connectionCount; i++) {
+                    if (connections[i].fromNode == nodeIdx || connections[i].toNode == nodeIdx) {
+                        fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"B\",\"location\":\"code_exporter.c:1105\",\"message\":\"Connection involving cycle_end\",\"data\":{\"connIdx\":%d,\"from\":%d,\"to\":%d,\"fromType\":%d,\"toType\":%d},\"timestamp\":%ld}\n", 
+                            i, connections[i].fromNode, connections[i].toNode,
+                            (connections[i].fromNode >= 0 && connections[i].fromNode < nodeCount) ? nodes[connections[i].fromNode].type : -1,
+                            (connections[i].toNode >= 0 && connections[i].toNode < nodeCount) ? nodes[connections[i].toNode].type : -1,
+                            (long)time(NULL));
+                    }
+                }
+                fclose(logFile);
+            }
+            // #endregion
+            
+            // If this is a DO loop's cycle_end, process the entire DO loop here
+            if (cycleNode >= 0 && !visited[cycleNode]) {
+                // #region agent log
+                FILE* logFile = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
+                if (logFile) {
+                    fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"A\",\"location\":\"code_exporter.c:1059\",\"message\":\"Processing DO loop from cycle_end\",\"data\":{\"cycleEndIdx\":%d,\"cycleNodeIdx\":%d},\"timestamp\":%ld}\n", nodeIdx, cycleNode, (long)time(NULL));
+                    fclose(logFile);
+                }
+                // #endregion
+                
+                // Mark cycle node as visited so it doesn't get processed separately
+                visited[cycleNode] = true;
+                
+                // Parse cycle value
+                char typeBuf[MAX_VAR_NAME_LENGTH];
+                char condBuf[MAX_VALUE_LENGTH];
+                char initBuf[MAX_VALUE_LENGTH];
+                char incrBuf[MAX_VALUE_LENGTH];
+                parse_cycle_value(nodes[cycleNode].value, typeBuf, condBuf, initBuf, incrBuf);
+                
+                // Push to stack
+                if (*cycleTop < 32) {
+                    cycleTypeStack[*cycleTop] = 'D';
+                    strncpy(cycleCondStack[*cycleTop], condBuf, MAX_VALUE_LENGTH - 1);
+                    cycleCondStack[*cycleTop][MAX_VALUE_LENGTH - 1] = '\0';
+                    strncpy(cycleInitStack[*cycleTop], initBuf, MAX_VALUE_LENGTH - 1);
+                    cycleInitStack[*cycleTop][MAX_VALUE_LENGTH - 1] = '\0';
+                    strncpy(cycleIncrStack[*cycleTop], incrBuf, MAX_VALUE_LENGTH - 1);
+                    cycleIncrStack[*cycleTop][MAX_VALUE_LENGTH - 1] = '\0';
+                    (*cycleTop)++;
+                }
+                
+                // Generate "do {" header
+                for (int i = 0; i < *indentLevel; i++) fprintf(file, "    ");
+                fprintf(file, "do {\n");
+                (*indentLevel)++;
+                
+                // Find body start from cycle_end (end -> body -> cycle)
+                int bodyStart = -1;
+                int outNodes[10];
+                int outCount = 0;
+                find_connections_from(nodeIdx, connections, connectionCount, outNodes, &outCount, 10);
+                for (int i = 0; i < outCount; i++) {
+                    if (outNodes[i] != cycleNode && outNodes[i] >= 0 && outNodes[i] < nodeCount) {
+                        bodyStart = outNodes[i];
+                        break;
+                    }
+                }
+                
+                // #region agent log
+                logFile = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
+                if (logFile) {
+                    fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"A\",\"location\":\"code_exporter.c:1100\",\"message\":\"DO loop body start found\",\"data\":{\"bodyStart\":%d},\"timestamp\":%ld}\n", bodyStart, (long)time(NULL));
+                    fclose(logFile);
+                }
+                // #endregion
+                
+                // Export loop body
+                if (bodyStart >= 0) {
+                    // Mark cycle node as visited (body exits to cycle)
+                    bool cycleWasVisited = visited[cycleNode];
+                    visited[cycleNode] = true;
+                    
+                    int nextNode = bodyStart;
+                    int loopIterations = 0;
+                    const int MAX_LOOP_ITERATIONS = 100;
+                    while (nextNode >= 0 && nextNode != cycleNode && nextNode < nodeCount && loopIterations < MAX_LOOP_ITERATIONS) {
+                        loopIterations++;
+                        
+                        if (nextNode == cycleNode) break;
+                        
+                        // Check if we've already visited this node
+                        if (visited[nextNode] && nextNode != nodeIdx && nextNode != cycleNode) {
+                            bool connectsToCycle = false;
+                            for (int j = 0; j < connectionCount; j++) {
+                                if (connections[j].fromNode == nextNode && connections[j].toNode == cycleNode) {
+                                    connectsToCycle = true;
+                                    break;
+                                }
+                            }
+                            if (!connectsToCycle) break;
+                        }
+                        
+                        int prevNext = nextNode;
+                        nextNode = export_node_recursive(file, nextNode, nodes, nodeCount,
+                                                        connections, connectionCount, visited, indentLevel,
+                                                        cycleTop, cycleTypeStack, cycleCondStack,
+                                                        cycleInitStack, cycleIncrStack);
+                        
+                        if (nextNode == prevNext || nextNode == -1) break;
+                        if (nextNode == cycleNode) break;
+                    }
+                    
+                    visited[cycleNode] = cycleWasVisited;
+                }
+                
+                // Pop from stack and close loop with "} while (condition);"
+                if (*cycleTop > 0) {
+                    (*indentLevel)--;
+                    char loopType = cycleTypeStack[*cycleTop - 1];
+                    const char* cond = cycleCondStack[*cycleTop - 1];
+                    (*cycleTop)--;
+                    
+                    for (int i = 0; i < *indentLevel; i++) fprintf(file, "    ");
+                    fprintf(file, "} while (%s);\n", cond[0] ? cond : "/* condition */");
+                }
+                
+                // Continue from after cycle node (find exit)
+                int exitNode = find_next_node(cycleNode, connections, connectionCount);
+                if (exitNode == nodeIdx) {
+                    // This is the loopback, find the actual exit
+                    for (int i = 0; i < connectionCount; i++) {
+                        if (connections[i].fromNode == cycleNode && connections[i].toNode != nodeIdx) {
+                            exitNode = connections[i].toNode;
+                            break;
+                        }
+                    }
+                }
+                return exitNode;
+            }
+            
+            // Otherwise, just continue to next node
             return find_next_node(nodeIdx, connections, connectionCount);
+        }
             
         default:
             break;
