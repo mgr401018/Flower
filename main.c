@@ -10,6 +10,21 @@
 #endif
 #define TINYFD_NOLIB
 #include "imports/tinyfiledialogs.h"
+
+// #region agent log
+// Debug logging helper
+static void debug_log(const char* location, const char* message, const char* hypothesisId, const char* dataJson) {
+    FILE* f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
+    if (f) {
+        if (dataJson && dataJson[0]) {
+            fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"%s\",\"location\":\"%s\",\"message\":\"%s\",\"timestamp\":%ld,\"data\":%s}\n", hypothesisId, location, message, (long)time(NULL), dataJson);
+        } else {
+            fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"%s\",\"location\":\"%s\",\"message\":\"%s\",\"timestamp\":%ld}\n", hypothesisId, location, message, (long)time(NULL));
+        }
+        fclose(f);
+    }
+}
+// #endregion
 #include "src/text_renderer.h"
 #include "src/block_process.h"
 #include "src/block_input.h"
@@ -5745,6 +5760,12 @@ void update_branch_x_positions(int ifBlockIndex) {
     double ifCenterX = nodes[ifBlock->ifNodeIndex].x;
     static int pos_log_count = 0;
     
+    // #region agent log
+    char logBuf[512];
+    snprintf(logBuf, sizeof(logBuf), "{\"ifBlockIndex\":%d,\"ifCenterX\":%.3f,\"leftBranchWidth\":%.3f,\"rightBranchWidth\":%.3f,\"trueBranchCount\":%d,\"falseBranchCount\":%d}", ifBlockIndex, ifCenterX, ifBlock->leftBranchWidth, ifBlock->rightBranchWidth, ifBlock->trueBranchCount, ifBlock->falseBranchCount);
+    debug_log("main.c:5741", "update_branch_x_positions entry", "H2", logBuf);
+    // #endregion
+    
     // Update convergence node to match IF node X position
     if (ifBlock->convergeNodeIndex >= 0 && ifBlock->convergeNodeIndex < nodeCount) {
         nodes[ifBlock->convergeNodeIndex].x = ifCenterX;
@@ -5755,7 +5776,17 @@ void update_branch_x_positions(int ifBlockIndex) {
     for (int i = 0; i < ifBlock->trueBranchCount; i++) {
         int nodeIdx = ifBlock->trueBranchNodes[i];
         if (nodeIdx >= 0 && nodeIdx < nodeCount) {
+            // #region agent log
+            double oldX = nodes[nodeIdx].x;
+            // #endregion
             nodes[nodeIdx].x = snap_to_grid_x(leftBranchX);
+            
+            // #region agent log
+            if (nodes[nodeIdx].type == NODE_CYCLE || nodes[nodeIdx].type == NODE_CYCLE_END) {
+                snprintf(logBuf, sizeof(logBuf), "{\"nodeIdx\":%d,\"nodeType\":%d,\"oldX\":%.3f,\"newX\":%.3f,\"leftBranchX\":%.3f}", nodeIdx, nodes[nodeIdx].type, oldX, nodes[nodeIdx].x, leftBranchX);
+                debug_log("main.c:5758", "cycle node X updated in true branch", "H2", logBuf);
+            }
+            // #endregion
 
             // If this is a nested IF, recursively update its branches
             if (nodes[nodeIdx].type == NODE_IF) {
@@ -5774,7 +5805,17 @@ void update_branch_x_positions(int ifBlockIndex) {
     for (int i = 0; i < ifBlock->falseBranchCount; i++) {
         int nodeIdx = ifBlock->falseBranchNodes[i];
         if (nodeIdx >= 0 && nodeIdx < nodeCount) {
+            // #region agent log
+            double oldX = nodes[nodeIdx].x;
+            // #endregion
             nodes[nodeIdx].x = snap_to_grid_x(rightBranchX);
+            
+            // #region agent log
+            if (nodes[nodeIdx].type == NODE_CYCLE || nodes[nodeIdx].type == NODE_CYCLE_END) {
+                snprintf(logBuf, sizeof(logBuf), "{\"nodeIdx\":%d,\"nodeType\":%d,\"oldX\":%.3f,\"newX\":%.3f,\"rightBranchX\":%.3f}", nodeIdx, nodes[nodeIdx].type, oldX, nodes[nodeIdx].x, rightBranchX);
+                debug_log("main.c:5777", "cycle node X updated in false branch", "H2", logBuf);
+            }
+            // #endregion
 
             // If this is a nested IF, recursively update its branches
             if (nodes[nodeIdx].type == NODE_IF) {
@@ -5787,6 +5828,33 @@ void update_branch_x_positions(int ifBlockIndex) {
             }
         }
     }
+    
+    // #region agent log
+    // Check for cycle nodes with owningIfBlock but not in branch arrays
+    for (int i = 0; i < nodeCount; i++) {
+        if ((nodes[i].type == NODE_CYCLE || nodes[i].type == NODE_CYCLE_END) && nodes[i].owningIfBlock == ifBlockIndex) {
+            bool inBranchArray = false;
+            for (int j = 0; j < ifBlock->trueBranchCount; j++) {
+                if (ifBlock->trueBranchNodes[j] == i) {
+                    inBranchArray = true;
+                    break;
+                }
+            }
+            if (!inBranchArray) {
+                for (int j = 0; j < ifBlock->falseBranchCount; j++) {
+                    if (ifBlock->falseBranchNodes[j] == i) {
+                        inBranchArray = true;
+                        break;
+                    }
+                }
+            }
+            if (!inBranchArray) {
+                snprintf(logBuf, sizeof(logBuf), "{\"nodeIdx\":%d,\"nodeType\":%d,\"nodeX\":%.3f,\"nodeBranchColumn\":%d,\"inBranchArray\":false}", i, nodes[i].type, nodes[i].x, nodes[i].branchColumn);
+                debug_log("main.c:5830", "cycle node NOT in branch array", "H2", logBuf);
+            }
+        }
+    }
+    // #endregion
 }
 
 // Update all IF block branch widths and node positions
@@ -6087,8 +6155,68 @@ void insert_cycle_block_in_connection(int connIndex) {
     FlowNode *from = &nodes[oldConn.fromNode];
     FlowNode *to = &nodes[oldConn.toNode];
     
+    // #region agent log
+    char logBuf[512];
+    snprintf(logBuf, sizeof(logBuf), "{\"connIndex\":%d,\"fromNode\":%d,\"fromX\":%.3f,\"fromY\":%.3f,\"fromBranchColumn\":%d,\"fromOwningIfBlock\":%d,\"fromType\":%d}", connIndex, oldConn.fromNode, from->x, from->y, from->branchColumn, from->owningIfBlock, from->type);
+    debug_log("main.c:6081", "insert_cycle_block_in_connection entry", "H1", logBuf);
+    // #endregion
+    
     double originalToY = to->y;
     int fromGridY = world_to_grid_y(from->y);
+    
+    // Calculate branch position (similar to insert_node_in_connection)
+    int targetBranchColumn = from->branchColumn;
+    double targetX = from->x;
+    int cycleOwningIfBlock = from->owningIfBlock;
+    int branchType = -1;
+    
+    // Determine branch position if in an IF branch
+    // For nodes already in a branch, use from->x directly (it's already positioned correctly)
+    // For nodes directly from an IF, calculate based on IF center and branch widths
+    if (from->owningIfBlock >= 0 && from->owningIfBlock < ifBlockCount && from->type != NODE_IF) {
+        // Node is already in a branch - use its current X position
+        // This works for both top-level and nested IF branches because
+        // update_branch_x_positions has already positioned it correctly
+        targetX = from->x;
+        targetBranchColumn = from->branchColumn;
+        cycleOwningIfBlock = from->owningIfBlock;
+        
+        // #region agent log
+        snprintf(logBuf, sizeof(logBuf), "{\"fromOwningIfBlock\":%d,\"fromX\":%.3f,\"fromBranchColumn\":%d,\"usingFromX\":true}", from->owningIfBlock, from->x, from->branchColumn);
+        debug_log("main.c:6174", "node in branch, using from->x", "NESTED", logBuf);
+        // #endregion
+    } else if (from->type == NODE_IF) {
+        // Inserting directly from IF block - determine branch from connection
+        branchType = get_if_branch_type(connIndex);
+        
+        int ifBlockIdx = -1;
+        for (int i = 0; i < ifBlockCount; i++) {
+            if (ifBlocks[i].ifNodeIndex == oldConn.fromNode) {
+                ifBlockIdx = i;
+                break;
+            }
+        }
+        
+        if (ifBlockIdx >= 0) {
+            double leftWidth = ifBlocks[ifBlockIdx].leftBranchWidth;
+            double rightWidth = ifBlocks[ifBlockIdx].rightBranchWidth;
+            
+            if (branchType == 0) {
+                // True branch (left)
+                targetBranchColumn = from->branchColumn - 2;
+                targetX = from->x - leftWidth;
+            } else if (branchType == 1) {
+                // False branch (right)
+                int falseBranchColumn = from->branchColumn + 2;
+                if (falseBranchColumn <= 0) {
+                    falseBranchColumn = abs(from->branchColumn) + 2;
+                }
+                targetBranchColumn = falseBranchColumn;
+                targetX = from->x + rightWidth;
+            }
+            cycleOwningIfBlock = ifBlockIdx;
+        }
+    }
     
     // Default placement (WHILE/FOR): cycle block then end point one grid below
     int cycleGridY = fromGridY - 1;
@@ -6097,14 +6225,19 @@ void insert_cycle_block_in_connection(int connIndex) {
     // Create cycle block
     int cycleNodeIndex = nodeCount;
     FlowNode *cycleNode = &nodes[nodeCount++];
-    cycleNode->x = snap_to_grid_x(from->x);
+    cycleNode->x = snap_to_grid_x(targetX);  // Use calculated branch position
     cycleNode->y = snap_to_grid_y(grid_to_world_y(cycleGridY));
     cycleNode->height = 0.26f;
     cycleNode->width = 0.34f;
     cycleNode->value[0] = '\0';
     cycleNode->type = NODE_CYCLE;
-    cycleNode->branchColumn = from->branchColumn;
-    cycleNode->owningIfBlock = from->owningIfBlock;
+    cycleNode->branchColumn = targetBranchColumn;  // Use calculated branch column
+    cycleNode->owningIfBlock = cycleOwningIfBlock;
+    
+    // #region agent log
+    snprintf(logBuf, sizeof(logBuf), "{\"cycleNodeIndex\":%d,\"cycleX\":%.3f,\"cycleY\":%.3f,\"cycleBranchColumn\":%d,\"cycleOwningIfBlock\":%d}", cycleNodeIndex, cycleNode->x, cycleNode->y, cycleNode->branchColumn, cycleNode->owningIfBlock);
+    debug_log("main.c:6100", "cycle node created", "H1,H3", logBuf);
+    // #endregion
     
     // Create cycle end point
     int endNodeIndex = nodeCount;
@@ -6115,8 +6248,88 @@ void insert_cycle_block_in_connection(int connIndex) {
     endNode->width = 0.12f;
     endNode->value[0] = '\0';
     endNode->type = NODE_CYCLE_END;
-    endNode->branchColumn = from->branchColumn;
-    endNode->owningIfBlock = from->owningIfBlock;
+    endNode->branchColumn = targetBranchColumn;  // Use calculated branch column
+    endNode->owningIfBlock = cycleOwningIfBlock;
+    
+    // Add cycle nodes to IF branch arrays (similar to insert_node_in_connection)
+    bool cycleAddedToBranch = false;
+    if (from->type == NODE_IF) {
+        // Inserting directly from IF block
+        for (int i = 0; i < ifBlockCount; i++) {
+            if (ifBlocks[i].ifNodeIndex == oldConn.fromNode) {
+                int resolvedBranchType = (branchType >= 0) ? branchType : get_if_branch_type(connIndex);
+                if (resolvedBranchType == 0) {
+                    // True branch (left)
+                    if (ifBlocks[i].trueBranchCount < MAX_NODES) {
+                        ifBlocks[i].trueBranchNodes[ifBlocks[i].trueBranchCount] = cycleNodeIndex;
+                        ifBlocks[i].trueBranchCount++;
+                        cycleNode->owningIfBlock = i;
+                        endNode->owningIfBlock = i;
+                        cycleOwningIfBlock = i;
+                        cycleAddedToBranch = true;
+                    }
+                } else if (resolvedBranchType == 1) {
+                    // False branch (right)
+                    if (ifBlocks[i].falseBranchCount < MAX_NODES) {
+                        ifBlocks[i].falseBranchNodes[ifBlocks[i].falseBranchCount] = cycleNodeIndex;
+                        ifBlocks[i].falseBranchCount++;
+                        cycleNode->owningIfBlock = i;
+                        endNode->owningIfBlock = i;
+                        cycleOwningIfBlock = i;
+                        cycleAddedToBranch = true;
+                    }
+                }
+                break;
+            }
+        }
+    } else if (from->owningIfBlock >= 0 && from->owningIfBlock < ifBlockCount) {
+        // Inserting from a node that's already in a branch
+        int relevantIfBlock = from->owningIfBlock;
+        bool addToTrueBranch = (from->branchColumn < 0);
+        
+        if (addToTrueBranch) {
+            // Add to true branch
+            if (ifBlocks[relevantIfBlock].trueBranchCount < MAX_NODES) {
+                ifBlocks[relevantIfBlock].trueBranchNodes[ifBlocks[relevantIfBlock].trueBranchCount] = cycleNodeIndex;
+                ifBlocks[relevantIfBlock].trueBranchCount++;
+                cycleNode->owningIfBlock = relevantIfBlock;
+                endNode->owningIfBlock = relevantIfBlock;
+                cycleOwningIfBlock = relevantIfBlock;
+                cycleAddedToBranch = true;
+            }
+        } else if (from->branchColumn > 0) {
+            // Add to false branch
+            if (ifBlocks[relevantIfBlock].falseBranchCount < MAX_NODES) {
+                ifBlocks[relevantIfBlock].falseBranchNodes[ifBlocks[relevantIfBlock].falseBranchCount] = cycleNodeIndex;
+                ifBlocks[relevantIfBlock].falseBranchCount++;
+                cycleNode->owningIfBlock = relevantIfBlock;
+                endNode->owningIfBlock = relevantIfBlock;
+                cycleOwningIfBlock = relevantIfBlock;
+                cycleAddedToBranch = true;
+            }
+        }
+    }
+    
+    // #region agent log
+    // Check if cycle nodes are in branch arrays
+    bool cycleInTrueBranch = false, cycleInFalseBranch = false;
+    if (cycleOwningIfBlock >= 0 && cycleOwningIfBlock < ifBlockCount) {
+        for (int i = 0; i < ifBlocks[cycleOwningIfBlock].trueBranchCount; i++) {
+            if (ifBlocks[cycleOwningIfBlock].trueBranchNodes[i] == cycleNodeIndex) {
+                cycleInTrueBranch = true;
+                break;
+            }
+        }
+        for (int i = 0; i < ifBlocks[cycleOwningIfBlock].falseBranchCount; i++) {
+            if (ifBlocks[cycleOwningIfBlock].falseBranchNodes[i] == cycleNodeIndex) {
+                cycleInFalseBranch = true;
+                break;
+            }
+        }
+    }
+    snprintf(logBuf, sizeof(logBuf), "{\"endNodeIndex\":%d,\"endX\":%.3f,\"endY\":%.3f,\"cycleInTrueBranch\":%s,\"cycleInFalseBranch\":%s,\"cycleAddedToBranch\":%s}", endNodeIndex, endNode->x, endNode->y, cycleInTrueBranch ? "true" : "false", cycleInFalseBranch ? "true" : "false", cycleAddedToBranch ? "true" : "false");
+    debug_log("main.c:6219", "end node created, branch array check", "H2", logBuf);
+    // #endregion
     
     // Push nodes below to make room (2 grid cells)
     double gridSpacing = GRID_CELL_SIZE * 2;
@@ -6158,6 +6371,11 @@ void insert_cycle_block_in_connection(int connIndex) {
     cycle->increment[0] = '\0';
     
     cycleBlockCount++;
+    
+    // #region agent log
+    snprintf(logBuf, sizeof(logBuf), "{\"cycleNodeIndex\":%d,\"finalCycleX\":%.3f,\"finalEndX\":%.3f}", cycleNodeIndex, cycleNode->x, endNode->x);
+    debug_log("main.c:6160", "insert_cycle_block_in_connection exit", "H1,H3", logBuf);
+    // #endregion
 }
 
 // Mouse button callback
@@ -6283,6 +6501,13 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
                             insert_if_block_in_connection(popupMenu.connectionIndex);
                         } else if (selectedType == NODE_CYCLE) {
                             insert_cycle_block_in_connection(popupMenu.connectionIndex);
+                            // #region agent log
+                            debug_log("main.c:6390", "after insert_cycle_block_in_connection", "H4", "{}");
+                            // #endregion
+                            update_all_branch_positions();
+                            // #region agent log
+                            debug_log("main.c:6393", "after update_all_branch_positions", "H4", "{}");
+                            // #endregion
                         } else {
                             insert_node_in_connection(popupMenu.connectionIndex, selectedType);
                         }
