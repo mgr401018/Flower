@@ -5955,8 +5955,8 @@ void insert_if_block_in_connection(int connIndex) {
     FlowNode *ifNode = &nodes[nodeCount];
     ifNode->x = snap_to_grid_x(from->x);  // Keep same X grid position
     ifNode->y = snap_to_grid_y(grid_to_world_y(ifGridY));
-    ifNode->height = 0.35f;  // Slightly taller for diamond shape
-    ifNode->width = 0.35f;
+    ifNode->height = 0.525f;  // 1.5x larger for diamond shape (0.35 * 1.5)
+    ifNode->width = 0.525f;   // 1.5x larger for diamond shape (0.35 * 1.5)
     ifNode->value[0] = '\0';  // Initialize value as empty string
     ifNode->type = NODE_IF;
     ifNode->branchColumn = from->branchColumn;  // Inherit branch column

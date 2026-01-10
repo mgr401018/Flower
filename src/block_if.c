@@ -81,30 +81,48 @@ void draw_block_if(const struct FlowNode *n) {
     glEnd();
     
     // Draw "True" label on the left side
-    float fontSize = n->height * 0.25f;
-    float trueLabelX = n->x - halfW - 0.15f;  // To the left of left connector
+    // Keep font size fixed (not scaled with block size) - use size for 0.35f block
+    float fontSize = 0.35f * 0.25f;  // Fixed size, equivalent to original
+    float trueLabelX = n->x - halfW - 0.2f;  // Moved further to the left
     float trueLabelY = n->y + 0.15f;  // Moved up a bit
     draw_text(trueLabelX, trueLabelY, "True", fontSize, 0.0f, 0.6f, 0.0f);  // Green text
     
     // Draw "False" label on the right side
-    float falseLabelX = n->x + halfW + 0.05f;  // To the right of right connector
+    float falseLabelX = n->x + halfW + 0.15f;  // Moved further to the right
     float falseLabelY = n->y + 0.15f;  // Moved up a bit
     draw_text(falseLabelX, falseLabelY, "False", fontSize, 0.8f, 0.0f, 0.0f);  // Red text
     
-    // Draw condition text - inside diamond if short, below if long
+    // Draw condition text - inside diamond if short, scale font size if > 11 characters,
+    // move below if font size would reach minimum (50%)
+    // Keep base font size fixed (not scaled with block size) - use size for 0.35f block
     if (n->value[0] != '\0') {
-        float condFontSize = n->height * 0.2f;
+        float baseFontSize = 0.35f * 0.2f;  // Fixed base size, equivalent to original
+        int valueLen = strlen(n->value);
+        
+        // Calculate when scale factor would hit 0.5 (minimum)
+        // scaleFactor = 1.0f - (extraChars * 0.04f) = 0.5
+        // extraChars = 12.5, so when extraChars >= 13 (valueLen >= 24), move below
+        int maxCharsForInside = 11 + 12;  // 23 characters max before moving below
+        
+        float condFontSize = baseFontSize;
+        float textY = n->y;  // Default: inside the diamond (centered)
+        
+        if (valueLen > maxCharsForInside) {
+            // Move below the IF block when we would hit minimum scale factor
+            textY = n->y - halfH - 0.05f;  // Below the diamond, moved up a bit
+            // Use base font size when below
+        } else if (valueLen > 11) {
+            // Scale down font size for each character beyond 11
+            int extraChars = valueLen - 11;
+            // Reduce font size by 4% for each character beyond 11
+            float scaleFactor = 1.0f - (extraChars * 0.04f);
+            if (scaleFactor < 0.5f) scaleFactor = 0.5f;  // Minimum 50% of original size
+            condFontSize = baseFontSize * scaleFactor;
+        }
+        
         float textWidth = get_text_width(n->value, condFontSize);
         float textX = n->x - textWidth * 0.5f;  // Center the text
-        
-        // If value is more than 7 characters, place it below the IF block
-        if (strlen(n->value) > 7) {
-            float textY = n->y - halfH - 0.05f;  // Below the diamond, moved up a bit
-            draw_text(textX, textY, n->value, condFontSize, 0.0f, 0.0f, 0.0f);
-        } else {
-            float textY = n->y;  // Inside the diamond (centered)
-            draw_text(textX, textY, n->value, condFontSize, 0.0f, 0.0f, 0.0f);
-        }
+        draw_text(textX, textY, n->value, condFontSize, 0.0f, 0.0f, 0.0f);
     }
 }
 
