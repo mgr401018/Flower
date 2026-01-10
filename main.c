@@ -6739,28 +6739,123 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
 
 void drawPopupMenu(GLFWwindow* window);  // Forward declaration
 
+// Helper function to draw a rounded rectangle
+static void draw_rounded_rectangle(float x, float y, float width, float height, float radius, bool filled) {
+    float halfW = width * 0.5f;
+    float halfH = height * 0.5f;
+    int segments = 12; // Number of segments per corner
+    
+    // Ensure radius doesn't exceed half the width or height
+    if (radius > halfW) radius = halfW;
+    if (radius > halfH) radius = halfH;
+    
+    // Corner arc centers (these are the inner corners where the arc starts)
+    float cx_tl = x - halfW + radius;  // Top-left
+    float cy_tl = y + halfH - radius;
+    float cx_tr = x + halfW - radius;  // Top-right
+    float cy_tr = y + halfH - radius;
+    float cx_br = x + halfW - radius;  // Bottom-right
+    float cy_br = y - halfH + radius;
+    float cx_bl = x - halfW + radius;  // Bottom-left
+    float cy_bl = y - halfH + radius;
+    
+    if (filled) {
+        // Draw filled rounded rectangle using a polygon
+        glBegin(GL_POLYGON);
+        
+        // Top-left corner arc (from left edge to top edge, going counter-clockwise)
+        for (int i = 0; i <= segments; ++i) {
+            float angle = 3.14159265f - 1.57079633f * (float)i / segments; // π to π/2
+            glVertex2f(cx_tl + cosf(angle) * radius, cy_tl + sinf(angle) * radius);
+        }
+        
+        // Top edge
+        glVertex2f(x + halfW - radius, y + halfH);
+        
+        // Top-right corner arc
+        for (int i = 1; i <= segments; ++i) {
+            float angle = 1.57079633f - 1.57079633f * (float)i / segments; // π/2 to 0
+            glVertex2f(cx_tr + cosf(angle) * radius, cy_tr + sinf(angle) * radius);
+        }
+        
+        // Right edge
+        glVertex2f(x + halfW, y - halfH + radius);
+        
+        // Bottom-right corner arc
+        for (int i = 1; i <= segments; ++i) {
+            float angle = 0.0f - 1.57079633f * (float)i / segments; // 0 to -π/2
+            glVertex2f(cx_br + cosf(angle) * radius, cy_br + sinf(angle) * radius);
+        }
+        
+        // Bottom edge
+        glVertex2f(x - halfW + radius, y - halfH);
+        
+        // Bottom-left corner arc
+        for (int i = 1; i <= segments; ++i) {
+            float angle = 4.71238898f - 1.57079633f * (float)i / segments; // 3π/2 to π
+            glVertex2f(cx_bl + cosf(angle) * radius, cy_bl + sinf(angle) * radius);
+        }
+        
+        // Left edge
+        glVertex2f(x - halfW, y + halfH - radius);
+        
+        glEnd();
+    } else {
+        // Draw rounded rectangle border (clockwise from top-left)
+        glBegin(GL_LINE_LOOP);
+        
+        // Top-left corner arc
+        for (int i = 0; i <= segments; ++i) {
+            float angle = 3.14159265f - 1.57079633f * (float)i / segments;
+            glVertex2f(cx_tl + cosf(angle) * radius, cy_tl + sinf(angle) * radius);
+        }
+        
+        // Top edge
+        glVertex2f(x + halfW - radius, y + halfH);
+        
+        // Top-right corner arc
+        for (int i = 1; i <= segments; ++i) {
+            float angle = 1.57079633f - 1.57079633f * (float)i / segments;
+            glVertex2f(cx_tr + cosf(angle) * radius, cy_tr + sinf(angle) * radius);
+        }
+        
+        // Right edge
+        glVertex2f(x + halfW, y - halfH + radius);
+        
+        // Bottom-right corner arc
+        for (int i = 1; i <= segments; ++i) {
+            float angle = 0.0f - 1.57079633f * (float)i / segments;
+            glVertex2f(cx_br + cosf(angle) * radius, cy_br + sinf(angle) * radius);
+        }
+        
+        // Bottom edge
+        glVertex2f(x - halfW + radius, y - halfH);
+        
+        // Bottom-left corner arc
+        for (int i = 1; i <= segments; ++i) {
+            float angle = 4.71238898f - 1.57079633f * (float)i / segments;
+            glVertex2f(cx_bl + cosf(angle) * radius, cy_bl + sinf(angle) * radius);
+        }
+        
+        // Left edge
+        glVertex2f(x - halfW, y + halfH - radius);
+        
+        glEnd();
+    }
+}
+
 void drawFlowNode(const FlowNode *n) {
     
     // Route to appropriate block drawing function based on type
     if (n->type == NODE_START) {
         // Start node: green rounded rectangle
         glColor3f(0.3f, 0.9f, 0.3f); // green for start
-    
-    glBegin(GL_QUADS);
-    glVertex2f(n->x - n->width * 0.5f, n->y + n->height * 0.5f);
-    glVertex2f(n->x + n->width * 0.5f, n->y + n->height * 0.5f);
-    glVertex2f(n->x + n->width * 0.5f, n->y - n->height * 0.5f);
-    glVertex2f(n->x - n->width * 0.5f, n->y - n->height * 0.5f);
-    glEnd();
+        float radius = (n->width < n->height ? n->width : n->height) * 0.15f; // 15% of smaller dimension
+        draw_rounded_rectangle((float)n->x, (float)n->y, n->width, n->height, radius, true);
 
     // Border
     glColor3f(0.2f, 0.2f, 0.0f);
-    glBegin(GL_LINE_LOOP);
-    glVertex2f(n->x - n->width * 0.5f, n->y + n->height * 0.5f);
-    glVertex2f(n->x + n->width * 0.5f, n->y + n->height * 0.5f);
-    glVertex2f(n->x + n->width * 0.5f, n->y - n->height * 0.5f);
-    glVertex2f(n->x - n->width * 0.5f, n->y - n->height * 0.5f);
-    glEnd();
+    draw_rounded_rectangle((float)n->x, (float)n->y, n->width, n->height, radius, false);
 
         // Output connector (bottom) only
     float r = 0.03f;
@@ -6785,22 +6880,12 @@ void drawFlowNode(const FlowNode *n) {
     } else if (n->type == NODE_END) {
         // End node: red rounded rectangle
         glColor3f(0.9f, 0.3f, 0.3f); // red for end
-        
-        glBegin(GL_QUADS);
-        glVertex2f(n->x - n->width * 0.5f, n->y + n->height * 0.5f);
-        glVertex2f(n->x + n->width * 0.5f, n->y + n->height * 0.5f);
-        glVertex2f(n->x + n->width * 0.5f, n->y - n->height * 0.5f);
-        glVertex2f(n->x - n->width * 0.5f, n->y - n->height * 0.5f);
-        glEnd();
+        float radius = (n->width < n->height ? n->width : n->height) * 0.15f; // 15% of smaller dimension
+        draw_rounded_rectangle((float)n->x, (float)n->y, n->width, n->height, radius, true);
         
         // Border
         glColor3f(0.2f, 0.2f, 0.0f);
-        glBegin(GL_LINE_LOOP);
-        glVertex2f(n->x - n->width * 0.5f, n->y + n->height * 0.5f);
-        glVertex2f(n->x + n->width * 0.5f, n->y + n->height * 0.5f);
-        glVertex2f(n->x + n->width * 0.5f, n->y - n->height * 0.5f);
-        glVertex2f(n->x - n->width * 0.5f, n->y - n->height * 0.5f);
-        glEnd();
+        draw_rounded_rectangle((float)n->x, (float)n->y, n->width, n->height, radius, false);
         
         // Input connector (top) only
         float r = 0.03f;
