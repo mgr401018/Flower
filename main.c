@@ -4340,6 +4340,12 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
                         }
                         targetBranchColumn = falseBranchColumn;
                         targetX = from->x + rightWidth;
+                        
+                        // #region agent log
+                        char logBuf[512];
+                        snprintf(logBuf, sizeof(logBuf), "{\"fromBranchColumn\":%d,\"falseBranchColumn\":%d,\"targetX\":%.3f,\"rightWidth\":%.3f}", from->branchColumn, falseBranchColumn, targetX, rightWidth);
+                        debug_log("main.c:4332", "false branch target calculation", "H3", logBuf);
+                        // #endregion
                     }
                     break;
                 }
@@ -4391,6 +4397,12 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
     newNode->branchColumn = targetBranchColumn;  // Set correct branch column
     newNode->owningIfBlock = newNodeOwningIfBlock;  // Set IF block ownership
     
+    // #region agent log
+    char logBuf[512];
+    snprintf(logBuf, sizeof(logBuf), "{\"newNodeIndex\":%d,\"nodeType\":%d,\"targetX\":%.3f,\"finalX\":%.3f,\"targetBranchColumn\":%d,\"owningIfBlock\":%d,\"fromBranchColumn\":%d}", nodeCount, nodeType, targetX, newNode->x, targetBranchColumn, newNodeOwningIfBlock, from->branchColumn);
+    debug_log("main.c:4386", "new node created with position", "H3", logBuf);
+    // #endregion
+    
     // Calculate initial width (will be recalculated when value is set)
     float fontSize = newNode->height * 0.3f;
     newNode->width = calculate_block_width(newNode->value, fontSize, 0.35f);
@@ -4438,51 +4450,73 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
         // Inserting from a node that's already in a branch
         relevantIfBlock = from->owningIfBlock;
         
+        // #region agent log
+        char logBuf[512];
+        snprintf(logBuf, sizeof(logBuf), "{\"fromNode\":%d,\"fromType\":%d,\"fromBranchColumn\":%d,\"fromOwningIfBlock\":%d,\"relevantIfBlock\":%d}", oldConn.fromNode, from->type, from->branchColumn, from->owningIfBlock, relevantIfBlock);
+        debug_log("main.c:4437", "insert_node_in_connection from node in branch", "H3", logBuf);
+        // #endregion
+        
         // Add the new node to the same branch as the parent
         if (relevantIfBlock < ifBlockCount) {
-            // Determine which branch based on the from node's branchColumn
-            // (searching branch arrays won't work for convergence nodes)
-            bool addToTrueBranch = (from->branchColumn < 0);
+            // CRITICAL FIX: Always check which branch array contains the from node
+            // BranchColumn can be ambiguous for deeply nested IFs (e.g., false->false->true
+            // can have positive branchColumn values). The branch arrays are the source of truth.
+            bool addToTrueBranch = false;
+            bool foundInTrueBranch = false;
+            bool foundInFalseBranch = false;
             
-            // HYPOTHESIS H3: If from is an IF node, we should use get_if_branch_type instead
-            int actualBranchType = -1;
-            if (from->type == NODE_IF) {
-                actualBranchType = get_if_branch_type(connIndex);
-                
-                // Override with actual branch type from connection
-                if (actualBranchType >= 0) {
-                    addToTrueBranch = (actualBranchType == 0);
+            // Check true branch array
+            for (int i = 0; i < ifBlocks[relevantIfBlock].trueBranchCount; i++) {
+                if (ifBlocks[relevantIfBlock].trueBranchNodes[i] == oldConn.fromNode) {
+                    foundInTrueBranch = true;
+                    break;
                 }
-            } else if (from->branchColumn == 0 && from->owningIfBlock >= 0) {
-                // CRITICAL FIX: When branchColumn is 0 but node is in a nested IF branch,
-                // we need to check which branch array it's actually in
-                // This happens when a nested IF's true branch has branchColumn = 0
-                bool foundInTrueBranch = false;
-                bool foundInFalseBranch = false;
-                
-                // Check true branch array
-                for (int i = 0; i < ifBlocks[relevantIfBlock].trueBranchCount; i++) {
-                    if (ifBlocks[relevantIfBlock].trueBranchNodes[i] == oldConn.fromNode) {
-                        foundInTrueBranch = true;
-                        break;
-                    }
-                }
-                
-                // Check false branch array
-                for (int i = 0; i < ifBlocks[relevantIfBlock].falseBranchCount; i++) {
-                    if (ifBlocks[relevantIfBlock].falseBranchNodes[i] == oldConn.fromNode) {
-                        foundInFalseBranch = true;
-                        break;
-                    }
-                }
-                
-                if (foundInTrueBranch) {
-                    addToTrueBranch = true;
-                } else if (foundInFalseBranch) {
-                    addToTrueBranch = false;
-                }
-                // If neither found, keep the branchColumn-based decision (shouldn't happen for regular nodes)
             }
+            
+            // Check false branch array
+            for (int i = 0; i < ifBlocks[relevantIfBlock].falseBranchCount; i++) {
+                if (ifBlocks[relevantIfBlock].falseBranchNodes[i] == oldConn.fromNode) {
+                    foundInFalseBranch = true;
+                    break;
+                }
+            }
+            
+            // #region agent log
+            snprintf(logBuf, sizeof(logBuf), "{\"fromNode\":%d,\"fromBranchColumn\":%d,\"foundInTrueBranch\":%d,\"foundInFalseBranch\":%d}", oldConn.fromNode, from->branchColumn, foundInTrueBranch ? 1 : 0, foundInFalseBranch ? 1 : 0);
+            debug_log("main.c:4461", "branch array lookup", "H3", logBuf);
+            // #endregion
+            
+            if (foundInTrueBranch) {
+                addToTrueBranch = true;
+            } else if (foundInFalseBranch) {
+                addToTrueBranch = false;
+            } else {
+                // Fallback: If from node is not in branch arrays (shouldn't happen for regular nodes),
+                // use branchColumn as fallback, or if from is an IF node, use get_if_branch_type
+                if (from->type == NODE_IF) {
+                    int actualBranchType = get_if_branch_type(connIndex);
+                    
+                    // #region agent log
+                    snprintf(logBuf, sizeof(logBuf), "{\"fromType\":%d,\"actualBranchType\":%d}", from->type, actualBranchType);
+                    debug_log("main.c:4480", "from is IF node, using get_if_branch_type", "H3", logBuf);
+                    // #endregion
+                    
+                    if (actualBranchType >= 0) {
+                        addToTrueBranch = (actualBranchType == 0);
+                    } else {
+                        // Ultimate fallback: use branchColumn
+                        addToTrueBranch = (from->branchColumn < 0);
+                    }
+                } else {
+                    // Fallback: use branchColumn
+                    addToTrueBranch = (from->branchColumn < 0);
+                }
+            }
+            
+            // #region agent log
+            snprintf(logBuf, sizeof(logBuf), "{\"addToTrueBranch\":%d,\"relevantIfBlock\":%d,\"newNodeIndex\":%d,\"targetBranchColumn\":%d}", addToTrueBranch ? 1 : 0, relevantIfBlock, newNodeIndex, targetBranchColumn);
+            debug_log("main.c:4487", "final branch assignment decision", "H3", logBuf);
+            // #endregion
             
             if (addToTrueBranch) {
                 // Add to true branch
@@ -4493,6 +4527,11 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
                     // Update node's owningIfBlock to match the branch it was added to
                     nodes[newNodeIndex].owningIfBlock = relevantIfBlock;
                     newNodeOwningIfBlock = relevantIfBlock;
+                    
+                    // #region agent log
+                    snprintf(logBuf, sizeof(logBuf), "{\"newNodeIndex\":%d,\"addedToTrueBranch\":true,\"relevantIfBlock\":%d,\"trueBranchCount\":%d}", newNodeIndex, relevantIfBlock, ifBlocks[relevantIfBlock].trueBranchCount);
+                    debug_log("main.c:4490", "node added to true branch", "H3", logBuf);
+                    // #endregion
                 }
             } else {
                 // Add to false branch
@@ -4503,6 +4542,11 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
                     // Update node's owningIfBlock to match the branch it was added to
                     nodes[newNodeIndex].owningIfBlock = relevantIfBlock;
                     newNodeOwningIfBlock = relevantIfBlock;
+                    
+                    // #region agent log
+                    snprintf(logBuf, sizeof(logBuf), "{\"newNodeIndex\":%d,\"addedToFalseBranch\":true,\"relevantIfBlock\":%d,\"falseBranchCount\":%d}", newNodeIndex, relevantIfBlock, ifBlocks[relevantIfBlock].falseBranchCount);
+                    debug_log("main.c:4500", "node added to false branch", "H3", logBuf);
+                    // #endregion
                 }
             }
         }
@@ -5633,13 +5677,63 @@ int get_if_branch_type(int connIndex) {
     const FlowNode *from = &nodes[connections[connIndex].fromNode];
     const FlowNode *to = &nodes[connections[connIndex].toNode];
     
+    // #region agent log
+    char logBuf[512];
+    snprintf(logBuf, sizeof(logBuf), "{\"connIndex\":%d,\"fromNode\":%d,\"fromType\":%d,\"toNode\":%d,\"toType\":%d,\"toBranchColumn\":%d,\"toOwningIfBlock\":%d}", connIndex, connections[connIndex].fromNode, from->type, connections[connIndex].toNode, to->type, to->branchColumn, to->owningIfBlock);
+    debug_log("main.c:5632", "get_if_branch_type entry", "H3", logBuf);
+    // #endregion
+    
     // Check if source is an IF block
     if (from->type != NODE_IF) {
         return -1;
     }
     
-    // Determine branch type based on target node's branchColumn
-    // This is more reliable than counting connections
+    // CRITICAL FIX: For nested IFs, branchColumn can be ambiguous.
+    // We need to check which branch array the target node is actually in.
+    // Find the IF block that this connection belongs to
+    int ifBlockIdx = -1;
+    for (int j = 0; j < ifBlockCount; j++) {
+        if (ifBlocks[j].ifNodeIndex == connections[connIndex].fromNode) {
+            ifBlockIdx = j;
+            break;
+        }
+    }
+    
+    if (ifBlockIdx >= 0 && to->type != NODE_CONVERGE) {
+        // Check which branch array contains the target node
+        // This is the source of truth for nested IFs
+        bool foundInTrueBranch = false;
+        bool foundInFalseBranch = false;
+        
+        // Check true branch array
+        for (int i = 0; i < ifBlocks[ifBlockIdx].trueBranchCount; i++) {
+            if (ifBlocks[ifBlockIdx].trueBranchNodes[i] == connections[connIndex].toNode) {
+                foundInTrueBranch = true;
+                break;
+            }
+        }
+        
+        // Check false branch array
+        for (int i = 0; i < ifBlocks[ifBlockIdx].falseBranchCount; i++) {
+            if (ifBlocks[ifBlockIdx].falseBranchNodes[i] == connections[connIndex].toNode) {
+                foundInFalseBranch = true;
+                break;
+            }
+        }
+        
+        // #region agent log
+        snprintf(logBuf, sizeof(logBuf), "{\"connIndex\":%d,\"ifBlockIdx\":%d,\"toNode\":%d,\"toBranchColumn\":%d,\"foundInTrueBranch\":%d,\"foundInFalseBranch\":%d}", connIndex, ifBlockIdx, connections[connIndex].toNode, to->branchColumn, foundInTrueBranch ? 1 : 0, foundInFalseBranch ? 1 : 0);
+        debug_log("main.c:5691", "get_if_branch_type branch array check", "H3", logBuf);
+        // #endregion
+        
+        if (foundInTrueBranch) {
+            return 0;  // True branch
+        } else if (foundInFalseBranch) {
+            return 1;  // False branch
+        }
+    }
+    
+    // Fallback: Use branchColumn or connection order for convergence points
     if (to->type == NODE_CONVERGE) {
         // Special case: both IF->convergence connections have the same branchColumn
         // Use connection order instead
@@ -5648,6 +5742,10 @@ int get_if_branch_type(int connIndex) {
         for (int i = 0; i < connectionCount; i++) {
             if (connections[i].fromNode == fromNode) {
                 if (i == connIndex) {
+                    // #region agent log
+                    snprintf(logBuf, sizeof(logBuf), "{\"connIndex\":%d,\"connectionIndex\":%d,\"result\":%d}", connIndex, connectionIndex, connectionIndex);
+                    debug_log("main.c:5693", "get_if_branch_type converge case", "H3", logBuf);
+                    // #endregion
                     return connectionIndex;  // 0 = true (first), 1 = false (second)
                 }
                 connectionIndex++;
@@ -5655,9 +5753,17 @@ int get_if_branch_type(int connIndex) {
         }
     } else if (to->branchColumn < 0) {
         // Target is in a left branch (negative column) = true branch
+        // #region agent log
+        snprintf(logBuf, sizeof(logBuf), "{\"connIndex\":%d,\"toBranchColumn\":%d,\"result\":0,\"fallback\":true}", connIndex, to->branchColumn);
+        debug_log("main.c:5710", "get_if_branch_type negative branchColumn fallback", "H3", logBuf);
+        // #endregion
         return 0;
     } else if (to->branchColumn > 0) {
         // Target is in a right branch (positive column) = false branch
+        // #region agent log
+        snprintf(logBuf, sizeof(logBuf), "{\"connIndex\":%d,\"toBranchColumn\":%d,\"result\":1,\"fallback\":true}", connIndex, to->branchColumn);
+        debug_log("main.c:5717", "get_if_branch_type positive branchColumn fallback", "H3", logBuf);
+        // #endregion
         return 1;
     } else {
         // Target is in main branch (convergence point)
@@ -5756,6 +5862,12 @@ double calculate_branch_width(int ifBlockIndex, int branchType) {
     int *branchNodes = (branchType == 0) ? ifBlock->trueBranchNodes : ifBlock->falseBranchNodes;
     int branchCount = (branchType == 0) ? ifBlock->trueBranchCount : ifBlock->falseBranchCount;
 
+    // #region agent log
+    char logBuf[512];
+    snprintf(logBuf, sizeof(logBuf), "{\"ifBlockIndex\":%d,\"branchType\":%d,\"branchCount\":%d,\"parentIfIndex\":%d}", ifBlockIndex, branchType, branchCount, ifBlock->parentIfIndex);
+    debug_log("main.c:5748", "calculate_branch_width entry", "H1,H2,H3", logBuf);
+    // #endregion
+
     for (int i = 0; i < branchCount; i++) {
         int nodeIdx = branchNodes[i];
         if (nodeIdx < 0 || nodeIdx >= nodeCount) continue;
@@ -5770,11 +5882,22 @@ double calculate_branch_width(int ifBlockIndex, int branchType) {
             }
 
             if (nestedIfIdx >= 0) {
+                // #region agent log
+                snprintf(logBuf, sizeof(logBuf), "{\"ifBlockIndex\":%d,\"branchType\":%d,\"foundNestedIf\":%d,\"nestedIfIdx\":%d}", ifBlockIndex, branchType, nodeIdx, nestedIfIdx);
+                debug_log("main.c:5763", "found nested IF in branch", "H1,H2,H3", logBuf);
+                // #endregion
+
                 double nestedLeft = calculate_branch_width(nestedIfIdx, 0);
                 double nestedRight = calculate_branch_width(nestedIfIdx, 1);
                 // A nested IF needs space for its widest branch (left or right)
                 // Plus 1.0 for the IF node itself as the center
                 double nestedWidthNeeded = (nestedLeft > nestedRight ? nestedLeft : nestedRight) + 1.0;
+                
+                // #region agent log
+                snprintf(logBuf, sizeof(logBuf), "{\"ifBlockIndex\":%d,\"branchType\":%d,\"nestedIfIdx\":%d,\"nestedLeft\":%.3f,\"nestedRight\":%.3f,\"nestedWidthNeeded\":%.3f,\"maxWidthBefore\":%.3f}", ifBlockIndex, branchType, nestedIfIdx, nestedLeft, nestedRight, nestedWidthNeeded, maxWidth);
+                debug_log("main.c:5772", "nested IF width calculation", "H1,H2,H5", logBuf);
+                // #endregion
+
                 if (nestedWidthNeeded > maxWidth) {
                     maxWidth = nestedWidthNeeded;
                 }
@@ -5785,6 +5908,11 @@ double calculate_branch_width(int ifBlockIndex, int branchType) {
             }
         }
     }
+
+    // #region agent log
+    snprintf(logBuf, sizeof(logBuf), "{\"ifBlockIndex\":%d,\"branchType\":%d,\"finalMaxWidth\":%.3f}", ifBlockIndex, branchType, maxWidth);
+    debug_log("main.c:5789", "calculate_branch_width exit", "H1,H2,H3", logBuf);
+    // #endregion
 
     return maxWidth;
 }
@@ -5902,9 +6030,20 @@ void update_all_branch_positions(void) {
     const int maxIterations = 10;
     static int width_log_count = 0;
 
+    // #region agent log
+    char logBuf[512];
+    snprintf(logBuf, sizeof(logBuf), "{\"ifBlockCount\":%d}", ifBlockCount);
+    debug_log("main.c:5898", "update_all_branch_positions entry", "H4", logBuf);
+    // #endregion
+
     while (changed && iterations < maxIterations) {
         changed = false;
         iterations++;
+
+        // #region agent log
+        snprintf(logBuf, sizeof(logBuf), "{\"iteration\":%d}", iterations);
+        debug_log("main.c:5905", "width calculation iteration", "H4", logBuf);
+        // #endregion
 
         for (int i = 0; i < ifBlockCount; i++) {
             double oldLeft = ifBlocks[i].leftBranchWidth;
@@ -5912,6 +6051,14 @@ void update_all_branch_positions(void) {
 
             ifBlocks[i].leftBranchWidth = calculate_branch_width(i, 0);
             ifBlocks[i].rightBranchWidth = calculate_branch_width(i, 1);
+
+            // #region agent log
+            if (fabs(ifBlocks[i].leftBranchWidth - oldLeft) > 0.001 ||
+                fabs(ifBlocks[i].rightBranchWidth - oldRight) > 0.001) {
+                snprintf(logBuf, sizeof(logBuf), "{\"ifBlockIndex\":%d,\"oldLeft\":%.3f,\"newLeft\":%.3f,\"oldRight\":%.3f,\"newRight\":%.3f,\"parentIfIndex\":%d}", i, oldLeft, ifBlocks[i].leftBranchWidth, oldRight, ifBlocks[i].rightBranchWidth, ifBlocks[i].parentIfIndex);
+                debug_log("main.c:5913", "branch width changed", "H1,H2,H4", logBuf);
+            }
+            // #endregion
 
             if (fabs(ifBlocks[i].leftBranchWidth - oldLeft) > 0.001 ||
                 fabs(ifBlocks[i].rightBranchWidth - oldRight) > 0.001) {
@@ -6051,6 +6198,12 @@ void insert_if_block_in_connection(int connIndex) {
             ifBlock->branchColumn = falseBranchCol;
             ifNode->branchColumn = ifBlock->branchColumn;
             convergeNode->branchColumn = ifBlock->branchColumn;
+            
+            // #region agent log
+            char logBuf[512];
+            snprintf(logBuf, sizeof(logBuf), "{\"ifBlockIndex\":%d,\"fromBranchColumn\":%d,\"falseBranchCol\":%d,\"parentIfIdx\":%d,\"branchType\":1}", ifBlockCount, from->branchColumn, falseBranchCol, parentIfIdx);
+            debug_log("main.c:6086", "false branch column calculation", "H3", logBuf);
+            // #endregion
         }
         
         // Update owningIfBlock for both IF and convergence nodes
