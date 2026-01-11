@@ -11,20 +11,6 @@
 #define TINYFD_NOLIB
 #include "imports/tinyfiledialogs.h"
 
-// #region agent log
-// Debug logging helper
-static void debug_log(const char* location, const char* message, const char* hypothesisId, const char* dataJson) {
-    FILE* f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-    if (f) {
-        if (dataJson && dataJson[0]) {
-            fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"%s\",\"location\":\"%s\",\"message\":\"%s\",\"timestamp\":%ld,\"data\":%s}\n", hypothesisId, location, message, (long)time(NULL), dataJson);
-        } else {
-            fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"%s\",\"location\":\"%s\",\"message\":\"%s\",\"timestamp\":%ld}\n", hypothesisId, location, message, (long)time(NULL));
-        }
-        fclose(f);
-    }
-}
-// #endregion
 #include "src/text_renderer.h"
 #include "src/block_process.h"
 #include "src/block_input.h"
@@ -369,7 +355,7 @@ void cursor_position_callback(GLFWwindow* window, double xpos, double ypos) {
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
     (void)window;   // Mark as intentionally unused
     scrollOffsetX += xoffset * 0.1;  // Smooth horizontal scrolling factor
-    scrollOffsetY += yoffset * 0.1;  // Smooth vertical scrolling factor
+    scrollOffsetY -= yoffset * 0.1;  // Smooth vertical scrolling factor (flipped)
 }
 
 // Check if cursor is over a menu item (deprecated - menu width is now dynamic)
@@ -6064,12 +6050,6 @@ double calculate_branch_width(int ifBlockIndex, int branchType) {
     int *branchNodes = (branchType == 0) ? ifBlock->trueBranchNodes : ifBlock->falseBranchNodes;
     int branchCount = (branchType == 0) ? ifBlock->trueBranchCount : ifBlock->falseBranchCount;
 
-    // #region agent log
-    char logBuf[512];
-    snprintf(logBuf, sizeof(logBuf), "{\"ifBlockIndex\":%d,\"branchType\":%d,\"branchCount\":%d,\"parentIfIndex\":%d}", ifBlockIndex, branchType, branchCount, ifBlock->parentIfIndex);
-    debug_log("main.c:5787", "calculate_branch_width entry", "H1", logBuf);
-    // #endregion
-
     for (int i = 0; i < branchCount; i++) {
         int nodeIdx = branchNodes[i];
         if (nodeIdx < 0 || nodeIdx >= nodeCount) continue;
@@ -6084,11 +6064,6 @@ double calculate_branch_width(int ifBlockIndex, int branchType) {
             }
 
             if (nestedIfIdx >= 0) {
-                // #region agent log
-                snprintf(logBuf, sizeof(logBuf), "{\"ifBlockIndex\":%d,\"branchType\":%d,\"foundNestedIf\":%d,\"nestedIfIdx\":%d}", ifBlockIndex, branchType, nodeIdx, nestedIfIdx);
-                debug_log("main.c:5802", "found nested IF in branch", "H1", logBuf);
-                // #endregion
-
                 double nestedLeft = calculate_branch_width(nestedIfIdx, 0);
                 double nestedRight = calculate_branch_width(nestedIfIdx, 1);
                 
@@ -6104,11 +6079,6 @@ double calculate_branch_width(int ifBlockIndex, int branchType) {
                 // Calculate the total width needed: nested IF center + both branch widths
                 double nestedTotalWidth = nestedLeft + nestedRight + 1.0;
                 
-                // #region agent log
-                snprintf(logBuf, sizeof(logBuf), "{\"ifBlockIndex\":%d,\"branchType\":%d,\"nestedIfIdx\":%d,\"nestedLeft\":%.3f,\"nestedRight\":%.3f,\"nestedTotalWidth\":%.3f,\"maxWidthBefore\":%.3f}", ifBlockIndex, branchType, nestedIfIdx, nestedLeft, nestedRight, nestedTotalWidth, maxWidth);
-                debug_log("main.c:5811", "nested IF width calculation", "H1", logBuf);
-                // #endregion
-                
                 if (nestedTotalWidth > maxWidth) {
                     maxWidth = nestedTotalWidth;
                 }
@@ -6119,11 +6089,6 @@ double calculate_branch_width(int ifBlockIndex, int branchType) {
             }
         }
     }
-
-    // #region agent log
-    snprintf(logBuf, sizeof(logBuf), "{\"ifBlockIndex\":%d,\"branchType\":%d,\"finalMaxWidth\":%.3f}", ifBlockIndex, branchType, maxWidth);
-    debug_log("main.c:5828", "calculate_branch_width exit", "H1", logBuf);
-    // #endregion
 
     return maxWidth;
 }
@@ -6186,20 +6151,9 @@ void update_all_branch_positions(void) {
     int iterations = 0;
     const int maxIterations = 10;
 
-    // #region agent log
-    char logBuf[512];
-    snprintf(logBuf, sizeof(logBuf), "{\"ifBlockCount\":%d}", ifBlockCount);
-    debug_log("main.c:5883", "update_all_branch_positions entry", "H1", logBuf);
-    // #endregion
-
     while (changed && iterations < maxIterations) {
         changed = false;
         iterations++;
-
-        // #region agent log
-        snprintf(logBuf, sizeof(logBuf), "{\"iteration\":%d}", iterations);
-        debug_log("main.c:5890", "width calculation iteration", "H1", logBuf);
-        // #endregion
 
         for (int i = 0; i < ifBlockCount; i++) {
             double oldLeft = ifBlocks[i].leftBranchWidth;
@@ -6207,14 +6161,6 @@ void update_all_branch_positions(void) {
 
             ifBlocks[i].leftBranchWidth = calculate_branch_width(i, 0);
             ifBlocks[i].rightBranchWidth = calculate_branch_width(i, 1);
-
-            // #region agent log
-            if (fabs(ifBlocks[i].leftBranchWidth - oldLeft) > 0.001 ||
-                fabs(ifBlocks[i].rightBranchWidth - oldRight) > 0.001) {
-                snprintf(logBuf, sizeof(logBuf), "{\"ifBlockIndex\":%d,\"oldLeft\":%.3f,\"newLeft\":%.3f,\"oldRight\":%.3f,\"newRight\":%.3f,\"parentIfIndex\":%d}", i, oldLeft, ifBlocks[i].leftBranchWidth, oldRight, ifBlocks[i].rightBranchWidth, ifBlocks[i].parentIfIndex);
-                debug_log("main.c:5898", "branch width changed", "H1", logBuf);
-            }
-            // #endregion
 
             if (fabs(ifBlocks[i].leftBranchWidth - oldLeft) > 0.001 ||
                 fabs(ifBlocks[i].rightBranchWidth - oldRight) > 0.001) {
@@ -6470,10 +6416,10 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
         const double scrollSpeed = 0.1;  // Same speed as mouse scroll
         switch (key) {
             case GLFW_KEY_UP:
-                scrollOffsetY -= scrollSpeed;
+                scrollOffsetY += scrollSpeed;  // Flipped: up arrow moves down
                 break;
             case GLFW_KEY_DOWN:
-                scrollOffsetY += scrollSpeed;
+                scrollOffsetY -= scrollSpeed;  // Flipped: down arrow moves up
                 break;
             case GLFW_KEY_LEFT:
                 scrollOffsetX -= scrollSpeed;
@@ -6495,12 +6441,6 @@ void insert_cycle_block_in_connection(int connIndex) {
     FlowNode *from = &nodes[oldConn.fromNode];
     FlowNode *to = &nodes[oldConn.toNode];
     
-    // #region agent log
-    char logBuf[512];
-    snprintf(logBuf, sizeof(logBuf), "{\"connIndex\":%d,\"fromNode\":%d,\"fromX\":%.3f,\"fromY\":%.3f,\"fromBranchColumn\":%d,\"fromOwningIfBlock\":%d,\"fromType\":%d}", connIndex, oldConn.fromNode, from->x, from->y, from->branchColumn, from->owningIfBlock, from->type);
-    debug_log("main.c:6081", "insert_cycle_block_in_connection entry", "H1", logBuf);
-    // #endregion
-    
     double originalToY = to->y;
     int fromGridY = world_to_grid_y(from->y);
     
@@ -6520,11 +6460,6 @@ void insert_cycle_block_in_connection(int connIndex) {
         targetX = from->x;
         targetBranchColumn = from->branchColumn;
         cycleOwningIfBlock = from->owningIfBlock;
-        
-        // #region agent log
-        snprintf(logBuf, sizeof(logBuf), "{\"fromOwningIfBlock\":%d,\"fromX\":%.3f,\"fromBranchColumn\":%d,\"usingFromX\":true}", from->owningIfBlock, from->x, from->branchColumn);
-        debug_log("main.c:6174", "node in branch, using from->x", "NESTED", logBuf);
-        // #endregion
     } else if (from->type == NODE_IF) {
         // Inserting directly from IF block - determine branch from connection
         branchType = get_if_branch_type(connIndex);
@@ -6562,11 +6497,6 @@ void insert_cycle_block_in_connection(int connIndex) {
     int cycleGridY = fromGridY - 1;
     int endGridY = cycleGridY - 1;
     
-    // #region agent log
-    snprintf(logBuf, sizeof(logBuf), "{\"fromGridY\":%d,\"cycleGridY\":%d,\"endGridY\":%d}", fromGridY, cycleGridY, endGridY);
-    debug_log("main.c:6258", "cycle grid Y calculation", "CYCLE_POS", logBuf);
-    // #endregion
-    
     // Create cycle block
     int cycleNodeIndex = nodeCount;
     FlowNode *cycleNode = &nodes[nodeCount++];
@@ -6580,22 +6510,12 @@ void insert_cycle_block_in_connection(int connIndex) {
     cycleNode->branchColumn = targetBranchColumn;  // Use calculated branch column
     cycleNode->owningIfBlock = cycleOwningIfBlock;
     
-    // #region agent log
-    snprintf(logBuf, sizeof(logBuf), "{\"cycleNodeIndex\":%d,\"cycleX\":%.3f,\"cycleY\":%.3f,\"cycleWorldY\":%.3f,\"cycleBranchColumn\":%d,\"cycleOwningIfBlock\":%d}", cycleNodeIndex, cycleNode->x, cycleNode->y, cycleWorldY, cycleNode->branchColumn, cycleNode->owningIfBlock);
-    debug_log("main.c:6100", "cycle node created", "H1,H3", logBuf);
-    // #endregion
-    
     // Create cycle end point
     int endNodeIndex = nodeCount;
     FlowNode *endNode = &nodes[nodeCount++];
     endNode->x = cycleNode->x;
     double endWorldY = grid_to_world_y(endGridY);
     endNode->y = snap_to_grid_y(endWorldY);
-    
-    // #region agent log
-    snprintf(logBuf, sizeof(logBuf), "{\"endNodeIndex\":%d,\"endWorldY\":%.3f,\"endY\":%.3f,\"cycleY\":%.3f,\"yDiff\":%.3f}", endNodeIndex, endWorldY, endNode->y, cycleNode->y, endNode->y - cycleNode->y);
-    debug_log("main.c:6283", "end node Y calculation", "CYCLE_POS", logBuf);
-    // #endregion
     endNode->height = 0.12f;
     endNode->width = 0.12f;
     endNode->value[0] = '\0';
@@ -6611,21 +6531,11 @@ void insert_cycle_block_in_connection(int connIndex) {
     int cycleGridYAfterSnap = world_to_grid_y(cycleNode->y);
     int endGridYAfterSnap = world_to_grid_y(endNode->y);
     
-    // #region agent log
-    snprintf(logBuf, sizeof(logBuf), "{\"cycleGridYAfterSnap\":%d,\"endGridYAfterSnap\":%d,\"cycleY\":%.3f,\"endY\":%.3f,\"minEndY\":%.3f}", cycleGridYAfterSnap, endGridYAfterSnap, cycleNode->y, endNode->y, minEndY);
-    debug_log("main.c:6305", "checking cycle/end spacing", "CYCLE_POS", logBuf);
-    // #endregion
-    
     // Check if they're in the same grid cell or end is too close
     if (endGridYAfterSnap >= cycleGridYAfterSnap) {
         // End is at same or higher grid cell - force it to be one grid cell below
         int requiredEndGridY = cycleGridYAfterSnap - 1;
         endNode->y = snap_to_grid_y(grid_to_world_y(requiredEndGridY));
-        
-        // #region agent log
-        snprintf(logBuf, sizeof(logBuf), "{\"requiredEndGridY\":%d,\"newEndY\":%.3f}", requiredEndGridY, endNode->y);
-        debug_log("main.c:6315", "forced end below cycle", "CYCLE_POS", logBuf);
-        // #endregion
     }
     
     // CRITICAL FIX: If cycle is in a nested IF branch, ensure end point is above convergence
@@ -6652,11 +6562,6 @@ void insert_cycle_block_in_connection(int connIndex) {
                         requiredEndGridY = cycleGridY - 1;
                     }
                     endNode->y = snap_to_grid_y(grid_to_world_y(requiredEndGridY));
-                    
-                    // #region agent log
-                    snprintf(logBuf, sizeof(logBuf), "{\"convergeGridY\":%d,\"requiredEndGridY\":%d,\"newEndY\":%.3f}", convergeGridY, requiredEndGridY, endNode->y);
-                    debug_log("main.c:6335", "adjusted end for nested IF convergence", "CYCLE_POS", logBuf);
-                    // #endregion
                 }
             }
         }
@@ -6764,27 +6669,6 @@ void insert_cycle_block_in_connection(int connIndex) {
         }
     }
     
-    // #region agent log
-    // Check if cycle nodes are in branch arrays
-    bool cycleInTrueBranch = false, cycleInFalseBranch = false;
-    if (cycleOwningIfBlock >= 0 && cycleOwningIfBlock < ifBlockCount) {
-        for (int i = 0; i < ifBlocks[cycleOwningIfBlock].trueBranchCount; i++) {
-            if (ifBlocks[cycleOwningIfBlock].trueBranchNodes[i] == cycleNodeIndex) {
-                cycleInTrueBranch = true;
-                break;
-            }
-        }
-        for (int i = 0; i < ifBlocks[cycleOwningIfBlock].falseBranchCount; i++) {
-            if (ifBlocks[cycleOwningIfBlock].falseBranchNodes[i] == cycleNodeIndex) {
-                cycleInFalseBranch = true;
-                break;
-            }
-        }
-    }
-    snprintf(logBuf, sizeof(logBuf), "{\"endNodeIndex\":%d,\"endX\":%.3f,\"endY\":%.3f,\"cycleInTrueBranch\":%s,\"cycleInFalseBranch\":%s,\"cycleAddedToBranch\":%s}", endNodeIndex, endNode->x, endNode->y, cycleInTrueBranch ? "true" : "false", cycleInFalseBranch ? "true" : "false", cycleAddedToBranch ? "true" : "false");
-    debug_log("main.c:6219", "end node created, branch array check", "H2", logBuf);
-    // #endregion
-    
     // Push nodes below to make room (2 grid cells)
     double gridSpacing = GRID_CELL_SIZE * 2;
     for (int i = 0; i < nodeCount; ++i) {
@@ -6842,11 +6726,6 @@ void insert_cycle_block_in_connection(int connIndex) {
     
     // Recalculate branch widths and positions after insertion
     update_all_branch_positions();
-    
-    // #region agent log
-    snprintf(logBuf, sizeof(logBuf), "{\"cycleNodeIndex\":%d,\"finalCycleX\":%.3f,\"finalEndX\":%.3f}", cycleNodeIndex, cycleNode->x, endNode->x);
-    debug_log("main.c:6160", "insert_cycle_block_in_connection exit", "H1,H3", logBuf);
-    // #endregion
 }
 
 // Mouse button callback
@@ -6972,8 +6851,6 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
                             insert_if_block_in_connection(popupMenu.connectionIndex);
                         } else if (selectedType == NODE_CYCLE) {
                             insert_cycle_block_in_connection(popupMenu.connectionIndex);
-                            // #region agent log
-                            debug_log("main.c:6390", "after insert_cycle_block_in_connection", "H4", "{}");
                             // #endregion
                         } else {
                             insert_node_in_connection(popupMenu.connectionIndex, selectedType);
