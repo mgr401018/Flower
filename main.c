@@ -1643,6 +1643,275 @@ void delete_node(int nodeIndex) {
         }
     }
     
+    // Special handling for CYCLE and CYCLE_END nodes
+    if (nodes[nodeIndex].type == NODE_CYCLE || nodes[nodeIndex].type == NODE_CYCLE_END) {
+        // Find the cycle block that this node belongs to
+        int cycleBlockIndex = -1;
+        if (nodes[nodeIndex].type == NODE_CYCLE) {
+            cycleBlockIndex = find_cycle_block_by_cycle_node(nodeIndex);
+        } else {
+            cycleBlockIndex = find_cycle_block_by_end_node(nodeIndex);
+        }
+        
+        if (cycleBlockIndex >= 0) {
+            CycleBlock *cycle = &cycleBlocks[cycleBlockIndex];
+            int cycleIdx = cycle->cycleNodeIndex;
+            int endIdx = cycle->cycleEndNodeIndex;
+            
+            // Find the connection coming into the cycle block
+            int incomingFromNode = -1;
+            for (int i = 0; i < connectionCount; i++) {
+                if (connections[i].toNode == cycleIdx && !is_cycle_loopback(i)) {
+                    incomingFromNode = connections[i].fromNode;
+                    break;
+                }
+            }
+            
+            // Find the connection going out of the cycle end
+            int outgoingToNode = -1;
+            for (int i = 0; i < connectionCount; i++) {
+                if (connections[i].fromNode == endIdx && !is_cycle_loopback(i)) {
+                    outgoingToNode = connections[i].toNode;
+                    break;
+                }
+            }
+            
+            // Find all nodes inside the cycle using BFS
+            // Start from cycle node's outgoing connections (body start), exclude loopback
+            int nodesInside[MAX_NODES];
+            int nodesInsideCount = 0;
+            bool visited[MAX_NODES] = {false};
+            
+            // Mark cycle and end nodes as visited (we don't want to include them in body)
+            visited[cycleIdx] = true;
+            visited[endIdx] = true;
+            
+            // BFS queue
+            int queue[MAX_NODES];
+            int queueFront = 0, queueBack = 0;
+            
+            // Start BFS from cycle node's outgoing connections (body start)
+            for (int i = 0; i < connectionCount; i++) {
+                if (connections[i].fromNode == cycleIdx && !is_cycle_loopback(i)) {
+                    int bodyStart = connections[i].toNode;
+                    if (bodyStart >= 0 && bodyStart < nodeCount && !visited[bodyStart]) {
+                        queue[queueBack++] = bodyStart;
+                        visited[bodyStart] = true;
+                    }
+                }
+            }
+            
+            // BFS to find all nodes in the loop body
+            while (queueFront < queueBack) {
+                int current = queue[queueFront++];
+                
+                // Don't include cycle end node
+                if (current == endIdx) {
+                    continue;
+                }
+                
+                // Add to body nodes
+                nodesInside[nodesInsideCount++] = current;
+                
+                // Continue BFS from this node
+                for (int i = 0; i < connectionCount; i++) {
+                    if (connections[i].fromNode == current) {
+                        int next = connections[i].toNode;
+                        // Don't follow loopback connections or connections to cycle/end nodes
+                        if (next >= 0 && next < nodeCount && !visited[next] && 
+                            next != cycleIdx && next != endIdx &&
+                            !is_cycle_loopback(i)) {
+                            queue[queueBack++] = next;
+                            visited[next] = true;
+                        }
+                    }
+                }
+            }
+            
+            // Remove all connections involving cycle, end, or body nodes
+            for (int i = connectionCount - 1; i >= 0; i--) {
+                bool shouldDelete = false;
+                
+                // Check if connection involves cycle or end node
+                if (connections[i].fromNode == cycleIdx || connections[i].toNode == cycleIdx ||
+                    connections[i].fromNode == endIdx || connections[i].toNode == endIdx) {
+                    shouldDelete = true;
+                }
+                
+                // Check if connection involves any body node
+                for (int j = 0; j < nodesInsideCount; j++) {
+                    if (connections[i].fromNode == nodesInside[j] || connections[i].toNode == nodesInside[j]) {
+                        shouldDelete = true;
+                        break;
+                    }
+                }
+                
+                if (shouldDelete) {
+                    // Remove this connection by shifting others down
+                    for (int j = i; j < connectionCount - 1; j++) {
+                        connections[j] = connections[j + 1];
+                    }
+                    connectionCount--;
+                }
+            }
+            
+            // Create direct connection from incoming to outgoing
+            if (incomingFromNode >= 0 && outgoingToNode >= 0) {
+                connections[connectionCount].fromNode = incomingFromNode;
+                connections[connectionCount].toNode = outgoingToNode;
+                connectionCount++;
+            }
+            
+            // Build list of all nodes to delete: cycle, end, and all body nodes
+            // Sort from highest to lowest index to avoid shifting issues
+            int nodesToDelete[MAX_NODES];
+            int deleteCount = 0;
+            nodesToDelete[deleteCount++] = cycleIdx;
+            nodesToDelete[deleteCount++] = endIdx;
+            for (int i = 0; i < nodesInsideCount; i++) {
+                nodesToDelete[deleteCount++] = nodesInside[i];
+            }
+            
+            // Sort in descending order (highest index first)
+            for (int i = 0; i < deleteCount - 1; i++) {
+                for (int j = i + 1; j < deleteCount; j++) {
+                    if (nodesToDelete[i] < nodesToDelete[j]) {
+                        int temp = nodesToDelete[i];
+                        nodesToDelete[i] = nodesToDelete[j];
+                        nodesToDelete[j] = temp;
+                    }
+                }
+            }
+            
+            // Delete the nodes (higher index first)
+            for (int i = 0; i < deleteCount; i++) {
+                int delIdx = nodesToDelete[i];
+                
+                // Shift all nodes after this one down
+                for (int j = delIdx; j < nodeCount - 1; j++) {
+                    nodes[j] = nodes[j + 1];
+                }
+                nodeCount--;
+                
+                // Update all connections to account for shifted indices
+                for (int j = 0; j < connectionCount; j++) {
+                    if (connections[j].fromNode > delIdx) {
+                        connections[j].fromNode--;
+                    }
+                    if (connections[j].toNode > delIdx) {
+                        connections[j].toNode--;
+                    }
+                }
+                
+                // Update IF blocks to account for shifted indices
+                for (int j = 0; j < ifBlockCount; j++) {
+                    if (ifBlocks[j].ifNodeIndex > delIdx) {
+                        ifBlocks[j].ifNodeIndex--;
+                    }
+                    if (ifBlocks[j].convergeNodeIndex > delIdx) {
+                        ifBlocks[j].convergeNodeIndex--;
+                    }
+                    for (int k = 0; k < ifBlocks[j].trueBranchCount; k++) {
+                        if (ifBlocks[j].trueBranchNodes[k] > delIdx) {
+                            ifBlocks[j].trueBranchNodes[k]--;
+                        }
+                    }
+                    for (int k = 0; k < ifBlocks[j].falseBranchCount; k++) {
+                        if (ifBlocks[j].falseBranchNodes[k] > delIdx) {
+                            ifBlocks[j].falseBranchNodes[k]--;
+                        }
+                    }
+                }
+                
+                // Update cycle blocks to account for shifted indices
+                for (int j = 0; j < cycleBlockCount; j++) {
+                    if (cycleBlocks[j].cycleNodeIndex > delIdx) {
+                        cycleBlocks[j].cycleNodeIndex--;
+                    }
+                    if (cycleBlocks[j].cycleEndNodeIndex > delIdx) {
+                        cycleBlocks[j].cycleEndNodeIndex--;
+                    }
+                }
+            }
+            
+            // Remove the cycle block
+            for (int i = cycleBlockIndex; i < cycleBlockCount - 1; i++) {
+                cycleBlocks[i] = cycleBlocks[i + 1];
+            }
+            cycleBlockCount--;
+            
+            // Update parent cycle indices
+            for (int i = 0; i < cycleBlockCount; i++) {
+                if (cycleBlocks[i].parentCycleIndex > cycleBlockIndex) {
+                    cycleBlocks[i].parentCycleIndex--;
+                }
+            }
+            
+            // Update owningIfBlock for all remaining nodes
+            // Any nodes that were owned by IF blocks need their index checked
+            for (int i = 0; i < nodeCount; i++) {
+                // Check if this node's owningIfBlock references a deleted node
+                // (This shouldn't happen for cycle nodes, but we check for safety)
+                if (nodes[i].owningIfBlock >= 0) {
+                    // The owningIfBlock index should still be valid after deletions
+                    // since we only deleted cycle-related nodes, not IF blocks
+                }
+            }
+            
+            // Rebuild variable table after deletion
+            rebuild_variable_table();
+            
+            // Pull up the outgoing node and everything below it to maintain normal connection length
+            if (incomingFromNode >= 0 && outgoingToNode >= 0) {
+                // Calculate how many nodes were deleted that were above outgoingToNode
+                int deletedAboveOutgoing = 0;
+                for (int i = 0; i < deleteCount; i++) {
+                    if (nodesToDelete[i] < outgoingToNode) {
+                        deletedAboveOutgoing++;
+                    }
+                }
+                
+                // The new index of the outgoing node after deletions
+                int newOutgoingIdx = outgoingToNode - deletedAboveOutgoing;
+                
+                // Similarly, calculate the new index of the incoming node
+                int deletedAboveIncoming = 0;
+                for (int i = 0; i < deleteCount; i++) {
+                    if (nodesToDelete[i] < incomingFromNode) {
+                        deletedAboveIncoming++;
+                    }
+                }
+                int newIncomingIdx = incomingFromNode - deletedAboveIncoming;
+                
+                if (newIncomingIdx >= 0 && newIncomingIdx < nodeCount && 
+                    newOutgoingIdx >= 0 && newOutgoingIdx < nodeCount) {
+                    
+                    FlowNode *incoming = &nodes[newIncomingIdx];
+                    FlowNode *outgoing = &nodes[newOutgoingIdx];
+                    
+                    // Calculate the desired connection length (normal)
+                    const double initialConnectionLength = 0.28;
+                    double desiredOutgoingY = incoming->y - incoming->height * 0.5 - outgoing->height * 0.5 - initialConnectionLength;
+                    
+                    // Calculate how much to move up
+                    double deltaY = desiredOutgoingY - outgoing->y;
+                    
+                    // Only pull up if deltaY is positive (moving up)
+                    if (deltaY > 0.001) {
+                        // Move all nodes below the outgoing node up
+                        for (int i = 0; i < nodeCount; i++) {
+                            if (nodes[i].y <= outgoing->y) {
+                                nodes[i].y = snap_to_grid_y(nodes[i].y + deltaY);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            return;  // Done handling CYCLE/CYCLE_END deletion
+        }
+    }
+    
     // Save the IF block ownership and branch before deletion (we'll need these later)
     int deletedNodeOwningIfBlock = nodes[nodeIndex].owningIfBlock;
     int deletedNodeBranchColumn = nodes[nodeIndex].branchColumn;
