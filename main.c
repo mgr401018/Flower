@@ -11,20 +11,6 @@
 #define TINYFD_NOLIB
 #include "imports/tinyfiledialogs.h"
 
-// #region agent log
-// Debug logging helper
-static void debug_log(const char* location, const char* message, const char* hypothesisId, const char* dataJson) {
-    FILE* f = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-    if (f) {
-        if (dataJson && dataJson[0]) {
-            fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"%s\",\"location\":\"%s\",\"message\":\"%s\",\"timestamp\":%ld,\"data\":%s}\n", hypothesisId, location, message, (long)time(NULL), dataJson);
-        } else {
-            fprintf(f, "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"%s\",\"location\":\"%s\",\"message\":\"%s\",\"timestamp\":%ld}\n", hypothesisId, location, message, (long)time(NULL));
-        }
-        fclose(f);
-    }
-}
-// #endregion
 #include "src/text_renderer.h"
 #include "src/block_process.h"
 #include "src/block_input.h"
@@ -369,7 +355,7 @@ void cursor_position_callback(GLFWwindow* window, double xpos, double ypos) {
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
     (void)window;   // Mark as intentionally unused
     scrollOffsetX += xoffset * 0.1;  // Smooth horizontal scrolling factor
-    scrollOffsetY += yoffset * 0.1;  // Smooth vertical scrolling factor
+    scrollOffsetY -= yoffset * 0.1;  // Smooth vertical scrolling factor (flipped)
 }
 
 // Check if cursor is over a menu item (deprecated - menu width is now dynamic)
@@ -1640,6 +1626,275 @@ void delete_node(int nodeIndex) {
             }
             
             return;  // Done handling IF/CONVERGE deletion
+        }
+    }
+    
+    // Special handling for CYCLE and CYCLE_END nodes
+    if (nodes[nodeIndex].type == NODE_CYCLE || nodes[nodeIndex].type == NODE_CYCLE_END) {
+        // Find the cycle block that this node belongs to
+        int cycleBlockIndex = -1;
+        if (nodes[nodeIndex].type == NODE_CYCLE) {
+            cycleBlockIndex = find_cycle_block_by_cycle_node(nodeIndex);
+        } else {
+            cycleBlockIndex = find_cycle_block_by_end_node(nodeIndex);
+        }
+        
+        if (cycleBlockIndex >= 0) {
+            CycleBlock *cycle = &cycleBlocks[cycleBlockIndex];
+            int cycleIdx = cycle->cycleNodeIndex;
+            int endIdx = cycle->cycleEndNodeIndex;
+            
+            // Find the connection coming into the cycle block
+            int incomingFromNode = -1;
+            for (int i = 0; i < connectionCount; i++) {
+                if (connections[i].toNode == cycleIdx && !is_cycle_loopback(i)) {
+                    incomingFromNode = connections[i].fromNode;
+                    break;
+                }
+            }
+            
+            // Find the connection going out of the cycle end
+            int outgoingToNode = -1;
+            for (int i = 0; i < connectionCount; i++) {
+                if (connections[i].fromNode == endIdx && !is_cycle_loopback(i)) {
+                    outgoingToNode = connections[i].toNode;
+                    break;
+                }
+            }
+            
+            // Find all nodes inside the cycle using BFS
+            // Start from cycle node's outgoing connections (body start), exclude loopback
+            int nodesInside[MAX_NODES];
+            int nodesInsideCount = 0;
+            bool visited[MAX_NODES] = {false};
+            
+            // Mark cycle and end nodes as visited (we don't want to include them in body)
+            visited[cycleIdx] = true;
+            visited[endIdx] = true;
+            
+            // BFS queue
+            int queue[MAX_NODES];
+            int queueFront = 0, queueBack = 0;
+            
+            // Start BFS from cycle node's outgoing connections (body start)
+            for (int i = 0; i < connectionCount; i++) {
+                if (connections[i].fromNode == cycleIdx && !is_cycle_loopback(i)) {
+                    int bodyStart = connections[i].toNode;
+                    if (bodyStart >= 0 && bodyStart < nodeCount && !visited[bodyStart]) {
+                        queue[queueBack++] = bodyStart;
+                        visited[bodyStart] = true;
+                    }
+                }
+            }
+            
+            // BFS to find all nodes in the loop body
+            while (queueFront < queueBack) {
+                int current = queue[queueFront++];
+                
+                // Don't include cycle end node
+                if (current == endIdx) {
+                    continue;
+                }
+                
+                // Add to body nodes
+                nodesInside[nodesInsideCount++] = current;
+                
+                // Continue BFS from this node
+                for (int i = 0; i < connectionCount; i++) {
+                    if (connections[i].fromNode == current) {
+                        int next = connections[i].toNode;
+                        // Don't follow loopback connections or connections to cycle/end nodes
+                        if (next >= 0 && next < nodeCount && !visited[next] && 
+                            next != cycleIdx && next != endIdx &&
+                            !is_cycle_loopback(i)) {
+                            queue[queueBack++] = next;
+                            visited[next] = true;
+                        }
+                    }
+                }
+            }
+            
+            // Remove all connections involving cycle, end, or body nodes
+            for (int i = connectionCount - 1; i >= 0; i--) {
+                bool shouldDelete = false;
+                
+                // Check if connection involves cycle or end node
+                if (connections[i].fromNode == cycleIdx || connections[i].toNode == cycleIdx ||
+                    connections[i].fromNode == endIdx || connections[i].toNode == endIdx) {
+                    shouldDelete = true;
+                }
+                
+                // Check if connection involves any body node
+                for (int j = 0; j < nodesInsideCount; j++) {
+                    if (connections[i].fromNode == nodesInside[j] || connections[i].toNode == nodesInside[j]) {
+                        shouldDelete = true;
+                        break;
+                    }
+                }
+                
+                if (shouldDelete) {
+                    // Remove this connection by shifting others down
+                    for (int j = i; j < connectionCount - 1; j++) {
+                        connections[j] = connections[j + 1];
+                    }
+                    connectionCount--;
+                }
+            }
+            
+            // Create direct connection from incoming to outgoing
+            if (incomingFromNode >= 0 && outgoingToNode >= 0) {
+                connections[connectionCount].fromNode = incomingFromNode;
+                connections[connectionCount].toNode = outgoingToNode;
+                connectionCount++;
+            }
+            
+            // Build list of all nodes to delete: cycle, end, and all body nodes
+            // Sort from highest to lowest index to avoid shifting issues
+            int nodesToDelete[MAX_NODES];
+            int deleteCount = 0;
+            nodesToDelete[deleteCount++] = cycleIdx;
+            nodesToDelete[deleteCount++] = endIdx;
+            for (int i = 0; i < nodesInsideCount; i++) {
+                nodesToDelete[deleteCount++] = nodesInside[i];
+            }
+            
+            // Sort in descending order (highest index first)
+            for (int i = 0; i < deleteCount - 1; i++) {
+                for (int j = i + 1; j < deleteCount; j++) {
+                    if (nodesToDelete[i] < nodesToDelete[j]) {
+                        int temp = nodesToDelete[i];
+                        nodesToDelete[i] = nodesToDelete[j];
+                        nodesToDelete[j] = temp;
+                    }
+                }
+            }
+            
+            // Delete the nodes (higher index first)
+            for (int i = 0; i < deleteCount; i++) {
+                int delIdx = nodesToDelete[i];
+                
+                // Shift all nodes after this one down
+                for (int j = delIdx; j < nodeCount - 1; j++) {
+                    nodes[j] = nodes[j + 1];
+                }
+                nodeCount--;
+                
+                // Update all connections to account for shifted indices
+                for (int j = 0; j < connectionCount; j++) {
+                    if (connections[j].fromNode > delIdx) {
+                        connections[j].fromNode--;
+                    }
+                    if (connections[j].toNode > delIdx) {
+                        connections[j].toNode--;
+                    }
+                }
+                
+                // Update IF blocks to account for shifted indices
+                for (int j = 0; j < ifBlockCount; j++) {
+                    if (ifBlocks[j].ifNodeIndex > delIdx) {
+                        ifBlocks[j].ifNodeIndex--;
+                    }
+                    if (ifBlocks[j].convergeNodeIndex > delIdx) {
+                        ifBlocks[j].convergeNodeIndex--;
+                    }
+                    for (int k = 0; k < ifBlocks[j].trueBranchCount; k++) {
+                        if (ifBlocks[j].trueBranchNodes[k] > delIdx) {
+                            ifBlocks[j].trueBranchNodes[k]--;
+                        }
+                    }
+                    for (int k = 0; k < ifBlocks[j].falseBranchCount; k++) {
+                        if (ifBlocks[j].falseBranchNodes[k] > delIdx) {
+                            ifBlocks[j].falseBranchNodes[k]--;
+                        }
+                    }
+                }
+                
+                // Update cycle blocks to account for shifted indices
+                for (int j = 0; j < cycleBlockCount; j++) {
+                    if (cycleBlocks[j].cycleNodeIndex > delIdx) {
+                        cycleBlocks[j].cycleNodeIndex--;
+                    }
+                    if (cycleBlocks[j].cycleEndNodeIndex > delIdx) {
+                        cycleBlocks[j].cycleEndNodeIndex--;
+                    }
+                }
+            }
+            
+            // Remove the cycle block
+            for (int i = cycleBlockIndex; i < cycleBlockCount - 1; i++) {
+                cycleBlocks[i] = cycleBlocks[i + 1];
+            }
+            cycleBlockCount--;
+            
+            // Update parent cycle indices
+            for (int i = 0; i < cycleBlockCount; i++) {
+                if (cycleBlocks[i].parentCycleIndex > cycleBlockIndex) {
+                    cycleBlocks[i].parentCycleIndex--;
+                }
+            }
+            
+            // Update owningIfBlock for all remaining nodes
+            // Any nodes that were owned by IF blocks need their index checked
+            for (int i = 0; i < nodeCount; i++) {
+                // Check if this node's owningIfBlock references a deleted node
+                // (This shouldn't happen for cycle nodes, but we check for safety)
+                if (nodes[i].owningIfBlock >= 0) {
+                    // The owningIfBlock index should still be valid after deletions
+                    // since we only deleted cycle-related nodes, not IF blocks
+                }
+            }
+            
+            // Rebuild variable table after deletion
+            rebuild_variable_table();
+            
+            // Pull up the outgoing node and everything below it to maintain normal connection length
+            if (incomingFromNode >= 0 && outgoingToNode >= 0) {
+                // Calculate how many nodes were deleted that were above outgoingToNode
+                int deletedAboveOutgoing = 0;
+                for (int i = 0; i < deleteCount; i++) {
+                    if (nodesToDelete[i] < outgoingToNode) {
+                        deletedAboveOutgoing++;
+                    }
+                }
+                
+                // The new index of the outgoing node after deletions
+                int newOutgoingIdx = outgoingToNode - deletedAboveOutgoing;
+                
+                // Similarly, calculate the new index of the incoming node
+                int deletedAboveIncoming = 0;
+                for (int i = 0; i < deleteCount; i++) {
+                    if (nodesToDelete[i] < incomingFromNode) {
+                        deletedAboveIncoming++;
+                    }
+                }
+                int newIncomingIdx = incomingFromNode - deletedAboveIncoming;
+                
+                if (newIncomingIdx >= 0 && newIncomingIdx < nodeCount && 
+                    newOutgoingIdx >= 0 && newOutgoingIdx < nodeCount) {
+                    
+                    FlowNode *incoming = &nodes[newIncomingIdx];
+                    FlowNode *outgoing = &nodes[newOutgoingIdx];
+                    
+                    // Calculate the desired connection length (normal)
+                    const double initialConnectionLength = 0.28;
+                    double desiredOutgoingY = incoming->y - incoming->height * 0.5 - outgoing->height * 0.5 - initialConnectionLength;
+                    
+                    // Calculate how much to move up
+                    double deltaY = desiredOutgoingY - outgoing->y;
+                    
+                    // Only pull up if deltaY is positive (moving up)
+                    if (deltaY > 0.001) {
+                        // Move all nodes below the outgoing node up
+                        for (int i = 0; i < nodeCount; i++) {
+                            if (nodes[i].y <= outgoing->y) {
+                                nodes[i].y = snap_to_grid_y(nodes[i].y + deltaY);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            return;  // Done handling CYCLE/CYCLE_END deletion
         }
     }
     
@@ -4440,48 +4695,48 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
         
         // Add the new node to the same branch as the parent
         if (relevantIfBlock < ifBlockCount) {
-            // Determine which branch based on the from node's branchColumn
-            // (searching branch arrays won't work for convergence nodes)
-            bool addToTrueBranch = (from->branchColumn < 0);
+            // CRITICAL FIX: Always check which branch array contains the from node
+            // BranchColumn can be ambiguous for deeply nested IFs (e.g., false->false->true
+            // can have positive branchColumn values). The branch arrays are the source of truth.
+            bool addToTrueBranch = false;
+            bool foundInTrueBranch = false;
+            bool foundInFalseBranch = false;
             
-            // HYPOTHESIS H3: If from is an IF node, we should use get_if_branch_type instead
-            int actualBranchType = -1;
-            if (from->type == NODE_IF) {
-                actualBranchType = get_if_branch_type(connIndex);
-                
-                // Override with actual branch type from connection
-                if (actualBranchType >= 0) {
-                    addToTrueBranch = (actualBranchType == 0);
+            // Check true branch array
+            for (int i = 0; i < ifBlocks[relevantIfBlock].trueBranchCount; i++) {
+                if (ifBlocks[relevantIfBlock].trueBranchNodes[i] == oldConn.fromNode) {
+                    foundInTrueBranch = true;
+                    break;
                 }
-            } else if (from->branchColumn == 0 && from->owningIfBlock >= 0) {
-                // CRITICAL FIX: When branchColumn is 0 but node is in a nested IF branch,
-                // we need to check which branch array it's actually in
-                // This happens when a nested IF's true branch has branchColumn = 0
-                bool foundInTrueBranch = false;
-                bool foundInFalseBranch = false;
-                
-                // Check true branch array
-                for (int i = 0; i < ifBlocks[relevantIfBlock].trueBranchCount; i++) {
-                    if (ifBlocks[relevantIfBlock].trueBranchNodes[i] == oldConn.fromNode) {
-                        foundInTrueBranch = true;
-                        break;
+            }
+            
+            // Check false branch array
+            for (int i = 0; i < ifBlocks[relevantIfBlock].falseBranchCount; i++) {
+                if (ifBlocks[relevantIfBlock].falseBranchNodes[i] == oldConn.fromNode) {
+                    foundInFalseBranch = true;
+                    break;
+                }
+            }
+            
+            if (foundInTrueBranch) {
+                addToTrueBranch = true;
+            } else if (foundInFalseBranch) {
+                addToTrueBranch = false;
+            } else {
+                // Fallback: If from node is not in branch arrays (shouldn't happen for regular nodes),
+                // use branchColumn as fallback, or if from is an IF node, use get_if_branch_type
+                if (from->type == NODE_IF) {
+                    int actualBranchType = get_if_branch_type(connIndex);
+                    if (actualBranchType >= 0) {
+                        addToTrueBranch = (actualBranchType == 0);
+                    } else {
+                        // Ultimate fallback: use branchColumn
+                        addToTrueBranch = (from->branchColumn < 0);
                     }
+                } else {
+                    // Fallback: use branchColumn
+                    addToTrueBranch = (from->branchColumn < 0);
                 }
-                
-                // Check false branch array
-                for (int i = 0; i < ifBlocks[relevantIfBlock].falseBranchCount; i++) {
-                    if (ifBlocks[relevantIfBlock].falseBranchNodes[i] == oldConn.fromNode) {
-                        foundInFalseBranch = true;
-                        break;
-                    }
-                }
-                
-                if (foundInTrueBranch) {
-                    addToTrueBranch = true;
-                } else if (foundInFalseBranch) {
-                    addToTrueBranch = false;
-                }
-                // If neither found, keep the branchColumn-based decision (shouldn't happen for regular nodes)
             }
             
             if (addToTrueBranch) {
@@ -5638,8 +5893,47 @@ int get_if_branch_type(int connIndex) {
         return -1;
     }
     
-    // Determine branch type based on target node's branchColumn
-    // This is more reliable than counting connections
+    // CRITICAL FIX: For nested IFs, branchColumn can be ambiguous.
+    // We need to check which branch array the target node is actually in.
+    // Find the IF block that this connection belongs to
+    int ifBlockIdx = -1;
+    for (int j = 0; j < ifBlockCount; j++) {
+        if (ifBlocks[j].ifNodeIndex == connections[connIndex].fromNode) {
+            ifBlockIdx = j;
+            break;
+        }
+    }
+    
+    if (ifBlockIdx >= 0 && to->type != NODE_CONVERGE) {
+        // Check which branch array contains the target node
+        // This is the source of truth for nested IFs
+        bool foundInTrueBranch = false;
+        bool foundInFalseBranch = false;
+        
+        // Check true branch array
+        for (int i = 0; i < ifBlocks[ifBlockIdx].trueBranchCount; i++) {
+            if (ifBlocks[ifBlockIdx].trueBranchNodes[i] == connections[connIndex].toNode) {
+                foundInTrueBranch = true;
+                break;
+            }
+        }
+        
+        // Check false branch array
+        for (int i = 0; i < ifBlocks[ifBlockIdx].falseBranchCount; i++) {
+            if (ifBlocks[ifBlockIdx].falseBranchNodes[i] == connections[connIndex].toNode) {
+                foundInFalseBranch = true;
+                break;
+            }
+        }
+        
+        if (foundInTrueBranch) {
+            return 0;  // True branch
+        } else if (foundInFalseBranch) {
+            return 1;  // False branch
+        }
+    }
+    
+    // Fallback: Use branchColumn or connection order for convergence points
     if (to->type == NODE_CONVERGE) {
         // Special case: both IF->convergence connections have the same branchColumn
         // Use connection order instead
@@ -5772,11 +6066,21 @@ double calculate_branch_width(int ifBlockIndex, int branchType) {
             if (nestedIfIdx >= 0) {
                 double nestedLeft = calculate_branch_width(nestedIfIdx, 0);
                 double nestedRight = calculate_branch_width(nestedIfIdx, 1);
-                // A nested IF needs space for its widest branch (left or right)
-                // Plus 1.0 for the IF node itself as the center
-                double nestedWidthNeeded = (nestedLeft > nestedRight ? nestedLeft : nestedRight) + 1.0;
-                if (nestedWidthNeeded > maxWidth) {
-                    maxWidth = nestedWidthNeeded;
+                
+                // CRITICAL FIX: For nested IFs, we need to account for the expansion needed
+                // based on which branch of the nested IF contains deeper nesting.
+                // If the nested IF is in the true branch (left), we need space for:
+                // - The nested IF's true branch width (expands left)
+                // - The nested IF's false branch width (expands right)
+                // - 1.0 for the IF node itself
+                // But we also need to ensure that if the nested IF's inner branch expands
+                // toward the main branch, the parent branch expands enough to prevent overlap.
+                
+                // Calculate the total width needed: nested IF center + both branch widths
+                double nestedTotalWidth = nestedLeft + nestedRight + 1.0;
+                
+                if (nestedTotalWidth > maxWidth) {
+                    maxWidth = nestedTotalWidth;
                 }
             }
         } else {
@@ -5795,13 +6099,6 @@ void update_branch_x_positions(int ifBlockIndex) {
 
     IFBlock *ifBlock = &ifBlocks[ifBlockIndex];
     double ifCenterX = nodes[ifBlock->ifNodeIndex].x;
-    static int pos_log_count = 0;
-    
-    // #region agent log
-    char logBuf[512];
-    snprintf(logBuf, sizeof(logBuf), "{\"ifBlockIndex\":%d,\"ifCenterX\":%.3f,\"leftBranchWidth\":%.3f,\"rightBranchWidth\":%.3f,\"trueBranchCount\":%d,\"falseBranchCount\":%d}", ifBlockIndex, ifCenterX, ifBlock->leftBranchWidth, ifBlock->rightBranchWidth, ifBlock->trueBranchCount, ifBlock->falseBranchCount);
-    debug_log("main.c:5741", "update_branch_x_positions entry", "H2", logBuf);
-    // #endregion
     
     // Update convergence node to match IF node X position
     if (ifBlock->convergeNodeIndex >= 0 && ifBlock->convergeNodeIndex < nodeCount) {
@@ -5813,17 +6110,7 @@ void update_branch_x_positions(int ifBlockIndex) {
     for (int i = 0; i < ifBlock->trueBranchCount; i++) {
         int nodeIdx = ifBlock->trueBranchNodes[i];
         if (nodeIdx >= 0 && nodeIdx < nodeCount) {
-            // #region agent log
-            double oldX = nodes[nodeIdx].x;
-            // #endregion
             nodes[nodeIdx].x = snap_to_grid_x(leftBranchX);
-            
-            // #region agent log
-            if (nodes[nodeIdx].type == NODE_CYCLE || nodes[nodeIdx].type == NODE_CYCLE_END) {
-                snprintf(logBuf, sizeof(logBuf), "{\"nodeIdx\":%d,\"nodeType\":%d,\"oldX\":%.3f,\"newX\":%.3f,\"leftBranchX\":%.3f}", nodeIdx, nodes[nodeIdx].type, oldX, nodes[nodeIdx].x, leftBranchX);
-                debug_log("main.c:5758", "cycle node X updated in true branch", "H2", logBuf);
-            }
-            // #endregion
 
             // If this is a nested IF, recursively update its branches
             if (nodes[nodeIdx].type == NODE_IF) {
@@ -5842,17 +6129,7 @@ void update_branch_x_positions(int ifBlockIndex) {
     for (int i = 0; i < ifBlock->falseBranchCount; i++) {
         int nodeIdx = ifBlock->falseBranchNodes[i];
         if (nodeIdx >= 0 && nodeIdx < nodeCount) {
-            // #region agent log
-            double oldX = nodes[nodeIdx].x;
-            // #endregion
             nodes[nodeIdx].x = snap_to_grid_x(rightBranchX);
-            
-            // #region agent log
-            if (nodes[nodeIdx].type == NODE_CYCLE || nodes[nodeIdx].type == NODE_CYCLE_END) {
-                snprintf(logBuf, sizeof(logBuf), "{\"nodeIdx\":%d,\"nodeType\":%d,\"oldX\":%.3f,\"newX\":%.3f,\"rightBranchX\":%.3f}", nodeIdx, nodes[nodeIdx].type, oldX, nodes[nodeIdx].x, rightBranchX);
-                debug_log("main.c:5777", "cycle node X updated in false branch", "H2", logBuf);
-            }
-            // #endregion
 
             // If this is a nested IF, recursively update its branches
             if (nodes[nodeIdx].type == NODE_IF) {
@@ -5865,33 +6142,6 @@ void update_branch_x_positions(int ifBlockIndex) {
             }
         }
     }
-    
-    // #region agent log
-    // Check for cycle nodes with owningIfBlock but not in branch arrays
-    for (int i = 0; i < nodeCount; i++) {
-        if ((nodes[i].type == NODE_CYCLE || nodes[i].type == NODE_CYCLE_END) && nodes[i].owningIfBlock == ifBlockIndex) {
-            bool inBranchArray = false;
-            for (int j = 0; j < ifBlock->trueBranchCount; j++) {
-                if (ifBlock->trueBranchNodes[j] == i) {
-                    inBranchArray = true;
-                    break;
-                }
-            }
-            if (!inBranchArray) {
-                for (int j = 0; j < ifBlock->falseBranchCount; j++) {
-                    if (ifBlock->falseBranchNodes[j] == i) {
-                        inBranchArray = true;
-                        break;
-                    }
-                }
-            }
-            if (!inBranchArray) {
-                snprintf(logBuf, sizeof(logBuf), "{\"nodeIdx\":%d,\"nodeType\":%d,\"nodeX\":%.3f,\"nodeBranchColumn\":%d,\"inBranchArray\":false}", i, nodes[i].type, nodes[i].x, nodes[i].branchColumn);
-                debug_log("main.c:5830", "cycle node NOT in branch array", "H2", logBuf);
-            }
-        }
-    }
-    // #endregion
 }
 
 // Update all IF block branch widths and node positions
@@ -5900,7 +6150,6 @@ void update_all_branch_positions(void) {
     bool changed = true;
     int iterations = 0;
     const int maxIterations = 10;
-    static int width_log_count = 0;
 
     while (changed && iterations < maxIterations) {
         changed = false;
@@ -6167,10 +6416,10 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
         const double scrollSpeed = 0.1;  // Same speed as mouse scroll
         switch (key) {
             case GLFW_KEY_UP:
-                scrollOffsetY -= scrollSpeed;
+                scrollOffsetY += scrollSpeed;  // Flipped: up arrow moves down
                 break;
             case GLFW_KEY_DOWN:
-                scrollOffsetY += scrollSpeed;
+                scrollOffsetY -= scrollSpeed;  // Flipped: down arrow moves up
                 break;
             case GLFW_KEY_LEFT:
                 scrollOffsetX -= scrollSpeed;
@@ -6192,12 +6441,6 @@ void insert_cycle_block_in_connection(int connIndex) {
     FlowNode *from = &nodes[oldConn.fromNode];
     FlowNode *to = &nodes[oldConn.toNode];
     
-    // #region agent log
-    char logBuf[512];
-    snprintf(logBuf, sizeof(logBuf), "{\"connIndex\":%d,\"fromNode\":%d,\"fromX\":%.3f,\"fromY\":%.3f,\"fromBranchColumn\":%d,\"fromOwningIfBlock\":%d,\"fromType\":%d}", connIndex, oldConn.fromNode, from->x, from->y, from->branchColumn, from->owningIfBlock, from->type);
-    debug_log("main.c:6081", "insert_cycle_block_in_connection entry", "H1", logBuf);
-    // #endregion
-    
     double originalToY = to->y;
     int fromGridY = world_to_grid_y(from->y);
     
@@ -6217,11 +6460,6 @@ void insert_cycle_block_in_connection(int connIndex) {
         targetX = from->x;
         targetBranchColumn = from->branchColumn;
         cycleOwningIfBlock = from->owningIfBlock;
-        
-        // #region agent log
-        snprintf(logBuf, sizeof(logBuf), "{\"fromOwningIfBlock\":%d,\"fromX\":%.3f,\"fromBranchColumn\":%d,\"usingFromX\":true}", from->owningIfBlock, from->x, from->branchColumn);
-        debug_log("main.c:6174", "node in branch, using from->x", "NESTED", logBuf);
-        // #endregion
     } else if (from->type == NODE_IF) {
         // Inserting directly from IF block - determine branch from connection
         branchType = get_if_branch_type(connIndex);
@@ -6259,11 +6497,6 @@ void insert_cycle_block_in_connection(int connIndex) {
     int cycleGridY = fromGridY - 1;
     int endGridY = cycleGridY - 1;
     
-    // #region agent log
-    snprintf(logBuf, sizeof(logBuf), "{\"fromGridY\":%d,\"cycleGridY\":%d,\"endGridY\":%d}", fromGridY, cycleGridY, endGridY);
-    debug_log("main.c:6258", "cycle grid Y calculation", "CYCLE_POS", logBuf);
-    // #endregion
-    
     // Create cycle block
     int cycleNodeIndex = nodeCount;
     FlowNode *cycleNode = &nodes[nodeCount++];
@@ -6277,22 +6510,12 @@ void insert_cycle_block_in_connection(int connIndex) {
     cycleNode->branchColumn = targetBranchColumn;  // Use calculated branch column
     cycleNode->owningIfBlock = cycleOwningIfBlock;
     
-    // #region agent log
-    snprintf(logBuf, sizeof(logBuf), "{\"cycleNodeIndex\":%d,\"cycleX\":%.3f,\"cycleY\":%.3f,\"cycleWorldY\":%.3f,\"cycleBranchColumn\":%d,\"cycleOwningIfBlock\":%d}", cycleNodeIndex, cycleNode->x, cycleNode->y, cycleWorldY, cycleNode->branchColumn, cycleNode->owningIfBlock);
-    debug_log("main.c:6100", "cycle node created", "H1,H3", logBuf);
-    // #endregion
-    
     // Create cycle end point
     int endNodeIndex = nodeCount;
     FlowNode *endNode = &nodes[nodeCount++];
     endNode->x = cycleNode->x;
     double endWorldY = grid_to_world_y(endGridY);
     endNode->y = snap_to_grid_y(endWorldY);
-    
-    // #region agent log
-    snprintf(logBuf, sizeof(logBuf), "{\"endNodeIndex\":%d,\"endWorldY\":%.3f,\"endY\":%.3f,\"cycleY\":%.3f,\"yDiff\":%.3f}", endNodeIndex, endWorldY, endNode->y, cycleNode->y, endNode->y - cycleNode->y);
-    debug_log("main.c:6283", "end node Y calculation", "CYCLE_POS", logBuf);
-    // #endregion
     endNode->height = 0.12f;
     endNode->width = 0.12f;
     endNode->value[0] = '\0';
@@ -6308,21 +6531,11 @@ void insert_cycle_block_in_connection(int connIndex) {
     int cycleGridYAfterSnap = world_to_grid_y(cycleNode->y);
     int endGridYAfterSnap = world_to_grid_y(endNode->y);
     
-    // #region agent log
-    snprintf(logBuf, sizeof(logBuf), "{\"cycleGridYAfterSnap\":%d,\"endGridYAfterSnap\":%d,\"cycleY\":%.3f,\"endY\":%.3f,\"minEndY\":%.3f}", cycleGridYAfterSnap, endGridYAfterSnap, cycleNode->y, endNode->y, minEndY);
-    debug_log("main.c:6305", "checking cycle/end spacing", "CYCLE_POS", logBuf);
-    // #endregion
-    
     // Check if they're in the same grid cell or end is too close
     if (endGridYAfterSnap >= cycleGridYAfterSnap) {
         // End is at same or higher grid cell - force it to be one grid cell below
         int requiredEndGridY = cycleGridYAfterSnap - 1;
         endNode->y = snap_to_grid_y(grid_to_world_y(requiredEndGridY));
-        
-        // #region agent log
-        snprintf(logBuf, sizeof(logBuf), "{\"requiredEndGridY\":%d,\"newEndY\":%.3f}", requiredEndGridY, endNode->y);
-        debug_log("main.c:6315", "forced end below cycle", "CYCLE_POS", logBuf);
-        // #endregion
     }
     
     // CRITICAL FIX: If cycle is in a nested IF branch, ensure end point is above convergence
@@ -6349,11 +6562,6 @@ void insert_cycle_block_in_connection(int connIndex) {
                         requiredEndGridY = cycleGridY - 1;
                     }
                     endNode->y = snap_to_grid_y(grid_to_world_y(requiredEndGridY));
-                    
-                    // #region agent log
-                    snprintf(logBuf, sizeof(logBuf), "{\"convergeGridY\":%d,\"requiredEndGridY\":%d,\"newEndY\":%.3f}", convergeGridY, requiredEndGridY, endNode->y);
-                    debug_log("main.c:6335", "adjusted end for nested IF convergence", "CYCLE_POS", logBuf);
-                    // #endregion
                 }
             }
         }
@@ -6461,27 +6669,6 @@ void insert_cycle_block_in_connection(int connIndex) {
         }
     }
     
-    // #region agent log
-    // Check if cycle nodes are in branch arrays
-    bool cycleInTrueBranch = false, cycleInFalseBranch = false;
-    if (cycleOwningIfBlock >= 0 && cycleOwningIfBlock < ifBlockCount) {
-        for (int i = 0; i < ifBlocks[cycleOwningIfBlock].trueBranchCount; i++) {
-            if (ifBlocks[cycleOwningIfBlock].trueBranchNodes[i] == cycleNodeIndex) {
-                cycleInTrueBranch = true;
-                break;
-            }
-        }
-        for (int i = 0; i < ifBlocks[cycleOwningIfBlock].falseBranchCount; i++) {
-            if (ifBlocks[cycleOwningIfBlock].falseBranchNodes[i] == cycleNodeIndex) {
-                cycleInFalseBranch = true;
-                break;
-            }
-        }
-    }
-    snprintf(logBuf, sizeof(logBuf), "{\"endNodeIndex\":%d,\"endX\":%.3f,\"endY\":%.3f,\"cycleInTrueBranch\":%s,\"cycleInFalseBranch\":%s,\"cycleAddedToBranch\":%s}", endNodeIndex, endNode->x, endNode->y, cycleInTrueBranch ? "true" : "false", cycleInFalseBranch ? "true" : "false", cycleAddedToBranch ? "true" : "false");
-    debug_log("main.c:6219", "end node created, branch array check", "H2", logBuf);
-    // #endregion
-    
     // Push nodes below to make room (2 grid cells)
     double gridSpacing = GRID_CELL_SIZE * 2;
     for (int i = 0; i < nodeCount; ++i) {
@@ -6539,11 +6726,6 @@ void insert_cycle_block_in_connection(int connIndex) {
     
     // Recalculate branch widths and positions after insertion
     update_all_branch_positions();
-    
-    // #region agent log
-    snprintf(logBuf, sizeof(logBuf), "{\"cycleNodeIndex\":%d,\"finalCycleX\":%.3f,\"finalEndX\":%.3f}", cycleNodeIndex, cycleNode->x, endNode->x);
-    debug_log("main.c:6160", "insert_cycle_block_in_connection exit", "H1,H3", logBuf);
-    // #endregion
 }
 
 // Mouse button callback
@@ -6669,8 +6851,6 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
                             insert_if_block_in_connection(popupMenu.connectionIndex);
                         } else if (selectedType == NODE_CYCLE) {
                             insert_cycle_block_in_connection(popupMenu.connectionIndex);
-                            // #region agent log
-                            debug_log("main.c:6390", "after insert_cycle_block_in_connection", "H4", "{}");
                             // #endregion
                         } else {
                             insert_node_in_connection(popupMenu.connectionIndex, selectedType);
