@@ -5795,6 +5795,12 @@ double calculate_branch_width(int ifBlockIndex, int branchType) {
     int *branchNodes = (branchType == 0) ? ifBlock->trueBranchNodes : ifBlock->falseBranchNodes;
     int branchCount = (branchType == 0) ? ifBlock->trueBranchCount : ifBlock->falseBranchCount;
 
+    // #region agent log
+    char logBuf[512];
+    snprintf(logBuf, sizeof(logBuf), "{\"ifBlockIndex\":%d,\"branchType\":%d,\"branchCount\":%d,\"parentIfIndex\":%d}", ifBlockIndex, branchType, branchCount, ifBlock->parentIfIndex);
+    debug_log("main.c:5787", "calculate_branch_width entry", "H1", logBuf);
+    // #endregion
+
     for (int i = 0; i < branchCount; i++) {
         int nodeIdx = branchNodes[i];
         if (nodeIdx < 0 || nodeIdx >= nodeCount) continue;
@@ -5809,13 +5815,33 @@ double calculate_branch_width(int ifBlockIndex, int branchType) {
             }
 
             if (nestedIfIdx >= 0) {
+                // #region agent log
+                snprintf(logBuf, sizeof(logBuf), "{\"ifBlockIndex\":%d,\"branchType\":%d,\"foundNestedIf\":%d,\"nestedIfIdx\":%d}", ifBlockIndex, branchType, nodeIdx, nestedIfIdx);
+                debug_log("main.c:5802", "found nested IF in branch", "H1", logBuf);
+                // #endregion
+
                 double nestedLeft = calculate_branch_width(nestedIfIdx, 0);
                 double nestedRight = calculate_branch_width(nestedIfIdx, 1);
-                // A nested IF needs space for its widest branch (left or right)
-                // Plus 1.0 for the IF node itself as the center
-                double nestedWidthNeeded = (nestedLeft > nestedRight ? nestedLeft : nestedRight) + 1.0;
-                if (nestedWidthNeeded > maxWidth) {
-                    maxWidth = nestedWidthNeeded;
+                
+                // CRITICAL FIX: For nested IFs, we need to account for the expansion needed
+                // based on which branch of the nested IF contains deeper nesting.
+                // If the nested IF is in the true branch (left), we need space for:
+                // - The nested IF's true branch width (expands left)
+                // - The nested IF's false branch width (expands right)
+                // - 1.0 for the IF node itself
+                // But we also need to ensure that if the nested IF's inner branch expands
+                // toward the main branch, the parent branch expands enough to prevent overlap.
+                
+                // Calculate the total width needed: nested IF center + both branch widths
+                double nestedTotalWidth = nestedLeft + nestedRight + 1.0;
+                
+                // #region agent log
+                snprintf(logBuf, sizeof(logBuf), "{\"ifBlockIndex\":%d,\"branchType\":%d,\"nestedIfIdx\":%d,\"nestedLeft\":%.3f,\"nestedRight\":%.3f,\"nestedTotalWidth\":%.3f,\"maxWidthBefore\":%.3f}", ifBlockIndex, branchType, nestedIfIdx, nestedLeft, nestedRight, nestedTotalWidth, maxWidth);
+                debug_log("main.c:5811", "nested IF width calculation", "H1", logBuf);
+                // #endregion
+                
+                if (nestedTotalWidth > maxWidth) {
+                    maxWidth = nestedTotalWidth;
                 }
             }
         } else {
@@ -5824,6 +5850,11 @@ double calculate_branch_width(int ifBlockIndex, int branchType) {
             }
         }
     }
+
+    // #region agent log
+    snprintf(logBuf, sizeof(logBuf), "{\"ifBlockIndex\":%d,\"branchType\":%d,\"finalMaxWidth\":%.3f}", ifBlockIndex, branchType, maxWidth);
+    debug_log("main.c:5828", "calculate_branch_width exit", "H1", logBuf);
+    // #endregion
 
     return maxWidth;
 }
@@ -5845,17 +5876,7 @@ void update_branch_x_positions(int ifBlockIndex) {
     for (int i = 0; i < ifBlock->trueBranchCount; i++) {
         int nodeIdx = ifBlock->trueBranchNodes[i];
         if (nodeIdx >= 0 && nodeIdx < nodeCount) {
-            // #region agent log
-            double oldX = nodes[nodeIdx].x;
-            // #endregion
             nodes[nodeIdx].x = snap_to_grid_x(leftBranchX);
-            
-            // #region agent log
-            if (nodes[nodeIdx].type == NODE_CYCLE || nodes[nodeIdx].type == NODE_CYCLE_END) {
-                snprintf(logBuf, sizeof(logBuf), "{\"nodeIdx\":%d,\"nodeType\":%d,\"oldX\":%.3f,\"newX\":%.3f,\"leftBranchX\":%.3f}", nodeIdx, nodes[nodeIdx].type, oldX, nodes[nodeIdx].x, leftBranchX);
-                debug_log("main.c:5758", "cycle node X updated in true branch", "H2", logBuf);
-            }
-            // #endregion
 
             // If this is a nested IF, recursively update its branches
             if (nodes[nodeIdx].type == NODE_IF) {
@@ -5874,17 +5895,7 @@ void update_branch_x_positions(int ifBlockIndex) {
     for (int i = 0; i < ifBlock->falseBranchCount; i++) {
         int nodeIdx = ifBlock->falseBranchNodes[i];
         if (nodeIdx >= 0 && nodeIdx < nodeCount) {
-            // #region agent log
-            double oldX = nodes[nodeIdx].x;
-            // #endregion
             nodes[nodeIdx].x = snap_to_grid_x(rightBranchX);
-            
-            // #region agent log
-            if (nodes[nodeIdx].type == NODE_CYCLE || nodes[nodeIdx].type == NODE_CYCLE_END) {
-                snprintf(logBuf, sizeof(logBuf), "{\"nodeIdx\":%d,\"nodeType\":%d,\"oldX\":%.3f,\"newX\":%.3f,\"rightBranchX\":%.3f}", nodeIdx, nodes[nodeIdx].type, oldX, nodes[nodeIdx].x, rightBranchX);
-                debug_log("main.c:5777", "cycle node X updated in false branch", "H2", logBuf);
-            }
-            // #endregion
 
             // If this is a nested IF, recursively update its branches
             if (nodes[nodeIdx].type == NODE_IF) {
@@ -5897,33 +5908,6 @@ void update_branch_x_positions(int ifBlockIndex) {
             }
         }
     }
-    
-    // #region agent log
-    // Check for cycle nodes with owningIfBlock but not in branch arrays
-    for (int i = 0; i < nodeCount; i++) {
-        if ((nodes[i].type == NODE_CYCLE || nodes[i].type == NODE_CYCLE_END) && nodes[i].owningIfBlock == ifBlockIndex) {
-            bool inBranchArray = false;
-            for (int j = 0; j < ifBlock->trueBranchCount; j++) {
-                if (ifBlock->trueBranchNodes[j] == i) {
-                    inBranchArray = true;
-                    break;
-                }
-            }
-            if (!inBranchArray) {
-                for (int j = 0; j < ifBlock->falseBranchCount; j++) {
-                    if (ifBlock->falseBranchNodes[j] == i) {
-                        inBranchArray = true;
-                        break;
-                    }
-                }
-            }
-            if (!inBranchArray) {
-                snprintf(logBuf, sizeof(logBuf), "{\"nodeIdx\":%d,\"nodeType\":%d,\"nodeX\":%.3f,\"nodeBranchColumn\":%d,\"inBranchArray\":false}", i, nodes[i].type, nodes[i].x, nodes[i].branchColumn);
-                debug_log("main.c:5830", "cycle node NOT in branch array", "H2", logBuf);
-            }
-        }
-    }
-    // #endregion
 }
 
 // Update all IF block branch widths and node positions
@@ -5933,9 +5917,20 @@ void update_all_branch_positions(void) {
     int iterations = 0;
     const int maxIterations = 10;
 
+    // #region agent log
+    char logBuf[512];
+    snprintf(logBuf, sizeof(logBuf), "{\"ifBlockCount\":%d}", ifBlockCount);
+    debug_log("main.c:5883", "update_all_branch_positions entry", "H1", logBuf);
+    // #endregion
+
     while (changed && iterations < maxIterations) {
         changed = false;
         iterations++;
+
+        // #region agent log
+        snprintf(logBuf, sizeof(logBuf), "{\"iteration\":%d}", iterations);
+        debug_log("main.c:5890", "width calculation iteration", "H1", logBuf);
+        // #endregion
 
         for (int i = 0; i < ifBlockCount; i++) {
             double oldLeft = ifBlocks[i].leftBranchWidth;
@@ -5943,6 +5938,14 @@ void update_all_branch_positions(void) {
 
             ifBlocks[i].leftBranchWidth = calculate_branch_width(i, 0);
             ifBlocks[i].rightBranchWidth = calculate_branch_width(i, 1);
+
+            // #region agent log
+            if (fabs(ifBlocks[i].leftBranchWidth - oldLeft) > 0.001 ||
+                fabs(ifBlocks[i].rightBranchWidth - oldRight) > 0.001) {
+                snprintf(logBuf, sizeof(logBuf), "{\"ifBlockIndex\":%d,\"oldLeft\":%.3f,\"newLeft\":%.3f,\"oldRight\":%.3f,\"newRight\":%.3f,\"parentIfIndex\":%d}", i, oldLeft, ifBlocks[i].leftBranchWidth, oldRight, ifBlocks[i].rightBranchWidth, ifBlocks[i].parentIfIndex);
+                debug_log("main.c:5898", "branch width changed", "H1", logBuf);
+            }
+            // #endregion
 
             if (fabs(ifBlocks[i].leftBranchWidth - oldLeft) > 0.001 ||
                 fabs(ifBlocks[i].rightBranchWidth - oldRight) > 0.001) {
