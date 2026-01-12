@@ -34,7 +34,10 @@ SRCS = main.c \
        $(SRC_DIR)/block_converge.c \
        $(SRC_DIR)/block_cycle.c \
        $(SRC_DIR)/block_cycle_end.c \
-       $(SRC_DIR)/code_exporter.c
+       $(SRC_DIR)/code_exporter.c \
+       $(SRC_DIR)/file_io.c \
+       $(SRC_DIR)/drawing.c \
+       $(SRC_DIR)/actions.c
 
 # Object files (in build directory)
 OBJS = $(SRCS:%.c=$(BUILD_DIR)/%.o)
