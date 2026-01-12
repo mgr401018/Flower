@@ -2279,27 +2279,43 @@ void initialize_flowchart() {
     cycleBlockCount = 0;
     variableCount = 0;
     
-    // Create START node
+    // Create START node first to calculate its width (needed for END positioning)
     nodes[nodeCount].x = 0.0;
     nodes[nodeCount].y = 0.0;
-    nodes[nodeCount].width = 0.3f;
-    nodes[nodeCount].height = 0.15f;
+    nodes[nodeCount].height = 0.22f;  // Same height as other blocks
     strcpy(nodes[nodeCount].value, "START");
     nodes[nodeCount].type = NODE_START;
     nodes[nodeCount].branchColumn = 0;
     nodes[nodeCount].owningIfBlock = -1;
+    // Calculate width based on text content, same as other blocks
+    float fontSize = nodes[nodeCount].height * 0.3f;
+    nodes[nodeCount].width = calculate_block_width(nodes[nodeCount].value, fontSize, 0.35f);
     int startIndex = nodeCount++;
+    float startWidth = nodes[startIndex].width;  // Store START's width
     
-    // Create END node
+    // Create END node positioned at standard connection length below START
+    // Standard connection length formula: from->y - from->height * 0.5 - to->height * 0.5 - initialConnectionLength
+    const double initialConnectionLength = 0.28;
+    const float nodeHeight = 0.22f;  // Same height for both blocks
+    double startBottomY = nodes[startIndex].y - nodes[startIndex].height * 0.5;
+    double endTopY = startBottomY - initialConnectionLength;
+    double endCenterY = endTopY - nodeHeight * 0.5;
+    
     nodes[nodeCount].x = 0.0;
-    nodes[nodeCount].y = -1.0;
-    nodes[nodeCount].width = 0.3f;
-    nodes[nodeCount].height = 0.15f;
+    nodes[nodeCount].y = endCenterY;  // Position END at standard connection length
+    nodes[nodeCount].height = 0.22f;  // Same height as other blocks
     strcpy(nodes[nodeCount].value, "END");
     nodes[nodeCount].type = NODE_END;
     nodes[nodeCount].branchColumn = 0;
     nodes[nodeCount].owningIfBlock = -1;
+    // Calculate width based on text content, same as other blocks
+    fontSize = nodes[nodeCount].height * 0.3f;
+    nodes[nodeCount].width = calculate_block_width(nodes[nodeCount].value, fontSize, 0.35f);
     int endIndex = nodeCount++;
+    float endWidth = nodes[endIndex].width;  // Store END's width
+    
+    // Update START to use END's width (make START narrower)
+    nodes[startIndex].width = endWidth;
     
     // Connect START to END
     connections[connectionCount].fromNode = startIndex;
@@ -2343,6 +2359,9 @@ int main(void) {
         int width, height;
         glfwGetWindowSize(window, &width, &height);
         glViewport(0, 0, width, height);
+        
+        // Update text renderer with current window size
+        text_renderer_set_window_size(width, height);
         
         glMatrixMode(GL_PROJECTION);
         glLoadIdentity();

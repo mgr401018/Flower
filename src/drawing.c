@@ -665,7 +665,7 @@ void drawButtons(GLFWwindow* window) {
         // Draw "CLOSE" text
         float fontSize = labelHeight * 0.65f;
         float textWidth = get_text_width("CLOSE", fontSize);
-        float textX = labelX + (labelWidth - textWidth) * 0.25f;
+        float textX = labelX + (labelWidth - textWidth) * 0.5f;  // Center the text
         float textY = labelY - fontSize * 0.25f;
         draw_text(textX, textY, "CLOSE", fontSize, 1.0f, 1.0f, 1.0f);
     }
@@ -741,7 +741,7 @@ void drawButtons(GLFWwindow* window) {
         float fontSize = labelHeight * 0.65f;  // Reduced from 0.8f for better fit
         float textWidth = get_text_width("SAVE", fontSize);
         // Center horizontally:
-        float textX = labelX + (labelWidth - textWidth) * 0.25f;
+        float textX = labelX + (labelWidth - textWidth) * 0.5f;  // Center the text
         // Center vertically:
         float textY = labelY - fontSize * 0.25f;
         draw_text(textX, textY, "SAVE", fontSize, 1.0f, 1.0f, 1.0f);
@@ -775,7 +775,7 @@ void drawButtons(GLFWwindow* window) {
         float fontSize = labelHeight * 0.65f;  // Reduced from 0.8f for better fit
         float textWidth = get_text_width("LOAD", fontSize);
         // Center horizontally
-        float textX = labelX + (labelWidth - textWidth) *0.25f;
+        float textX = labelX + (labelWidth - textWidth) * 0.5f;  // Center the text
         float textY = labelY - fontSize * 0.25f;
         // Center vertically
         draw_text(textX, textY, "LOAD", fontSize, 1.0f, 1.0f, 1.0f);
@@ -809,7 +809,7 @@ void drawButtons(GLFWwindow* window) {
         // Draw "CLOSE" text
         float fontSize = labelHeight * 0.65f;
         float textWidth = get_text_width("CLOSE", fontSize);
-        float textX = labelX + (labelWidth - textWidth) * 0.25f;
+        float textX = labelX + (labelWidth - textWidth) * 0.5f;  // Center the text
         float textY = labelY - fontSize * 0.25f;
         draw_text(textX, textY, "CLOSE", fontSize, 1.0f, 1.0f, 1.0f);
     }
@@ -863,7 +863,7 @@ void drawButtons(GLFWwindow* window) {
         // Draw "EXPORT" text
         float fontSize = labelHeight * 0.65f;
         float textWidth = get_text_width("EXPORT", fontSize);
-        float textX = labelX + (labelWidth - textWidth) * 0.25f;
+        float textX = labelX + (labelWidth - textWidth) * 0.5f;  // Center the text
         float textY = labelY - fontSize * 0.25f;
         draw_text(textX, textY, "EXPORT", fontSize, 1.0f, 1.0f, 1.0f);
     }
@@ -940,7 +940,7 @@ void drawButtons(GLFWwindow* window) {
         // Draw "UNDO" text
         float fontSize = labelHeight * 0.65f;
         float textWidth = get_text_width("UNDO", fontSize);
-        float textX = labelX + (labelWidth - textWidth) * 0.25f;
+        float textX = labelX + (labelWidth - textWidth) * 0.5f;  // Center the text
         float textY = labelY - fontSize * 0.25f;
         draw_text(textX, textY, "UNDO", fontSize, 1.0f, 1.0f, 1.0f);
     }
@@ -973,7 +973,7 @@ void drawButtons(GLFWwindow* window) {
         // Draw "REDO" text
         float fontSize = labelHeight * 0.65f;
         float textWidth = get_text_width("REDO", fontSize);
-        float textX = labelX + (labelWidth - textWidth) * 0.25f;
+        float textX = labelX + (labelWidth - textWidth) * 0.5f;  // Center the text
         float textY = labelY - fontSize * 0.25f;
         draw_text(textX, textY, "REDO", fontSize, 1.0f, 1.0f, 1.0f);
     }
