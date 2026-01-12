@@ -46,10 +46,12 @@ const float FLOWCHART_SCALE = 0.6667f;
 // Circular button configuration (top-left corner, vertically aligned)
 const float buttonRadius = 0.04f;
 const float buttonX = -0.95f;  // Fixed X position for both buttons
-const float saveButtonY = 0.9f;   // Blue save button
-const float loadButtonY = 0.8f;   // Yellow load button
-const float closeButtonY = 0.7f;  // Red close button
+const float closeButtonY = 0.9f;  // Red close button (top)
+const float saveButtonY = 0.8f;   // Blue save button
+const float loadButtonY = 0.7f;   // Yellow load button
 const float exportButtonY = 0.6f; // Green export button
+const float undoButtonY = 0.5f;   // Purple undo button
+const float redoButtonY = 0.4f;   // Orange redo button
 
 // Flowchart node and connection data
 #define MAX_NODES 100
@@ -135,6 +137,23 @@ typedef struct {
 CycleBlock cycleBlocks[MAX_CYCLE_BLOCKS];
 int cycleBlockCount = 0;
 
+// Undo/Redo system
+#define MAX_UNDO_HISTORY 10
+typedef struct {
+    FlowNode nodes[MAX_NODES];
+    int nodeCount;
+    Connection connections[MAX_CONNECTIONS];
+    int connectionCount;
+    IFBlock ifBlocks[MAX_IF_BLOCKS];
+    int ifBlockCount;
+    CycleBlock cycleBlocks[MAX_CYCLE_BLOCKS];
+    int cycleBlockCount;
+} FlowchartState;
+
+FlowchartState undoHistory[MAX_UNDO_HISTORY];
+int undoHistoryCount = 0;
+int undoHistoryIndex = -1;  // -1 means no undo available, 0 means first state, etc.
+
 // Forward declarations
 void rebuild_variable_table(void);
 int get_if_branch_type(int connIndex);
@@ -142,6 +161,9 @@ void reposition_convergence_point(int ifBlockIndex, bool shouldPushNodesBelow);
 void update_all_branch_positions(void);
 bool is_valid_if_converge_connection(int fromNode, int toNode);
 void insert_cycle_block_in_connection(int connIndex);
+void save_state_for_undo(void);
+void perform_undo(void);
+void perform_redo(void);
 
 // Cycle helper utilities
 static int find_cycle_block_by_cycle_node(int nodeIndex) {
@@ -1326,12 +1348,19 @@ void load_flowchart(const char* filename) {
     
     // Rebuild variable table after loading
     rebuild_variable_table();
+    
+    // Reset undo history after loading
+    undoHistoryCount = 0;
+    undoHistoryIndex = -1;
+    save_state_for_undo();  // Save initial loaded state
 }
 // Delete a node and reconnect adjacent nodes automatically
 void delete_node(int nodeIndex) {
     if (nodeIndex < 0 || nodeIndex >= nodeCount) {
         return;
     }
+    
+    save_state_for_undo();
     
     // Special handling for IF and CONVERGE nodes
     if (nodes[nodeIndex].type == NODE_IF || nodes[nodeIndex].type == NODE_CONVERGE) {
@@ -2261,6 +2290,9 @@ void delete_node(int nodeIndex) {
     
     // Rebuild variable table after deletion
     rebuild_variable_table();
+    
+    // Save state AFTER operation completes (for redo to work correctly)
+    save_state_for_undo();
 }
 
 static bool parse_declare_block(const char* value, char* varName, VariableType* varType, bool* isArray, int* arraySize);
@@ -3531,6 +3563,8 @@ void edit_node_value(int nodeIndex) {
         return;
     }
     
+    save_state_for_undo();
+    
     FlowNode *node = &nodes[nodeIndex];
     
     if (node->type == NODE_DECLARE) {
@@ -4466,12 +4500,18 @@ void edit_node_value(int nodeIndex) {
             }
         }
     }
+    
+    // Save state AFTER operation completes (for redo to work correctly)
+    save_state_for_undo();
 }
 
 void insert_node_in_connection(int connIndex, NodeType nodeType) {
     if (nodeCount >= MAX_NODES || connectionCount >= MAX_CONNECTIONS) {
         return;
     }
+    
+    // Save state BEFORE the operation (for undo)
+    save_state_for_undo();
     
     Connection oldConn = connections[connIndex];
     FlowNode *from = &nodes[oldConn.fromNode];
@@ -5506,10 +5546,13 @@ void insert_node_in_connection(int connIndex, NodeType nodeType) {
     connections[connectionCount].toNode = oldConn.toNode;
     
     connectionCount++;
-    
+
 
     // Recalculate branch widths and positions after insertion
     update_all_branch_positions();
+    
+    // Save state AFTER operation completes (for redo to work correctly)
+    save_state_for_undo();
 }
 
 // Calculate the depth (in grid cells) of a branch, recursively accounting for nested IFs
@@ -6179,6 +6222,7 @@ void update_all_branch_positions(void) {
 
 // Insert IF block with branches in a connection
 void insert_if_block_in_connection(int connIndex) {
+    save_state_for_undo();
     if (nodeCount + 2 >= MAX_NODES || connectionCount + 6 >= MAX_CONNECTIONS || ifBlockCount >= MAX_IF_BLOCKS) {
         return;
     }
@@ -6343,6 +6387,9 @@ void insert_if_block_in_connection(int connIndex) {
 
     // Recalculate branch widths and positions after creating IF block
     update_all_branch_positions();
+    
+    // Save state AFTER operation completes (for redo to work correctly)
+    save_state_for_undo();
 }
 
 // Get all parent IF blocks from a given IF block to the root
@@ -6396,11 +6443,123 @@ int get_parent_if_chain_with_branches(int ifBlockIndex, int* parents, int* branc
     return count;
 }
 
+// Save current state for undo
+void save_state_for_undo(void) {
+    // If we're in the middle of undo history (not at the end), truncate future history
+    if (undoHistoryIndex >= 0 && undoHistoryIndex < undoHistoryCount - 1) {
+        undoHistoryCount = undoHistoryIndex + 1;
+    }
+    
+    // Shift history if we're at max capacity
+    if (undoHistoryCount >= MAX_UNDO_HISTORY) {
+        // Remove oldest state by shifting all states left
+        for (int i = 0; i < MAX_UNDO_HISTORY - 1; i++) {
+            undoHistory[i] = undoHistory[i + 1];
+        }
+        undoHistoryCount = MAX_UNDO_HISTORY - 1;
+    }
+    
+    // Save current state
+    FlowchartState *state = &undoHistory[undoHistoryCount];
+    state->nodeCount = nodeCount;
+    state->connectionCount = connectionCount;
+    state->ifBlockCount = ifBlockCount;
+    state->cycleBlockCount = cycleBlockCount;
+    
+    // Copy nodes
+    for (int i = 0; i < nodeCount; i++) {
+        state->nodes[i] = nodes[i];
+    }
+    
+    // Copy connections
+    for (int i = 0; i < connectionCount; i++) {
+        state->connections[i] = connections[i];
+    }
+    
+    // Copy IF blocks
+    for (int i = 0; i < ifBlockCount; i++) {
+        state->ifBlocks[i] = ifBlocks[i];
+    }
+    
+    // Copy cycle blocks
+    for (int i = 0; i < cycleBlockCount; i++) {
+        state->cycleBlocks[i] = cycleBlocks[i];
+    }
+    
+    undoHistoryCount++;
+    undoHistoryIndex = undoHistoryCount - 1;
+}
+
+// Restore state from undo history
+static void restore_state(const FlowchartState *state) {
+    nodeCount = state->nodeCount;
+    connectionCount = state->connectionCount;
+    ifBlockCount = state->ifBlockCount;
+    cycleBlockCount = state->cycleBlockCount;
+    
+    // Restore nodes
+    for (int i = 0; i < nodeCount; i++) {
+        nodes[i] = state->nodes[i];
+    }
+    
+    // Restore connections
+    for (int i = 0; i < connectionCount; i++) {
+        connections[i] = state->connections[i];
+    }
+    
+    // Restore IF blocks
+    for (int i = 0; i < ifBlockCount; i++) {
+        ifBlocks[i] = state->ifBlocks[i];
+    }
+    
+    // Restore cycle blocks
+    for (int i = 0; i < cycleBlockCount; i++) {
+        cycleBlocks[i] = state->cycleBlocks[i];
+    }
+    
+    // Rebuild variable table after restore
+    rebuild_variable_table();
+    
+    // Recalculate branch positions after restore (critical for correct rendering)
+    update_all_branch_positions();
+}
+
+// Perform undo
+void perform_undo(void) {
+    if (undoHistoryIndex <= 0) {
+        return;  // No undo available
+    }
+    
+    undoHistoryIndex--;
+    restore_state(&undoHistory[undoHistoryIndex]);
+}
+
+// Perform redo
+void perform_redo(void) {
+    if (undoHistoryIndex >= undoHistoryCount - 1) {
+        return;  // No redo available
+    }
+    
+    undoHistoryIndex++;
+    restore_state(&undoHistory[undoHistoryIndex]);
+}
+
 // Keyboard callback
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
     (void)window;
     (void)scancode;
-    (void)mods;
+    
+    // Undo: Ctrl+Z
+    if (key == GLFW_KEY_Z && action == GLFW_PRESS && (mods & GLFW_MOD_CONTROL) && !(mods & GLFW_MOD_SHIFT)) {
+        perform_undo();
+        return;
+    }
+    
+    // Redo: Ctrl+Shift+Z
+    if (key == GLFW_KEY_Z && action == GLFW_PRESS && (mods & GLFW_MOD_CONTROL) && (mods & GLFW_MOD_SHIFT)) {
+        perform_redo();
+        return;
+    }
     
     // Toggle deletion with 'D' key
     if (key == GLFW_KEY_D && action == GLFW_PRESS) {
@@ -6433,6 +6592,7 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
 
 // Insert CYCLE block with paired end point in a connection
 void insert_cycle_block_in_connection(int connIndex) {
+    save_state_for_undo();
     if (nodeCount + 2 >= MAX_NODES || connectionCount + 2 >= MAX_CONNECTIONS || cycleBlockCount >= MAX_CYCLE_BLOCKS) {
         return;
     }
@@ -6726,6 +6886,9 @@ void insert_cycle_block_in_connection(int connIndex) {
     
     // Recalculate branch widths and positions after insertion
     update_all_branch_positions();
+    
+    // Save state AFTER operation completes (for redo to work correctly)
+    save_state_for_undo();
 }
 
 // Mouse button callback
@@ -6744,6 +6907,11 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
         glfwGetWindowSize(window, &width, &height);
         float aspectRatio = (float)width / (float)height;
         float buttonX_scaled = buttonX * aspectRatio;
+        if (cursor_over_button(buttonX_scaled, closeButtonY, window)) {
+            // Red close button clicked - close program (top)
+            glfwSetWindowShouldClose(window, GLFW_TRUE);
+            return;
+        }
         if (cursor_over_button(buttonX_scaled, saveButtonY, window)) {
             // Blue save button clicked - open save dialog
             const char* filters[] = {"*.txt", "*.flow"};
@@ -6776,6 +6944,16 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
         if (cursor_over_button(buttonX_scaled, closeButtonY, window)) {
             // Red close button clicked - close program
             glfwSetWindowShouldClose(window, GLFW_TRUE);
+            return;
+        }
+        if (cursor_over_button(buttonX_scaled, undoButtonY, window)) {
+            // Purple undo button clicked
+            perform_undo();
+            return;
+        }
+        if (cursor_over_button(buttonX_scaled, redoButtonY, window)) {
+            // Orange redo button clicked
+            perform_redo();
             return;
         }
         if (cursor_over_button(buttonX_scaled, exportButtonY, window)) {
@@ -7510,10 +7688,66 @@ void drawButtons(GLFWwindow* window) {
     // buttonX was -0.95 in old system (-1 to 1), now map to same visual position
     float buttonX_scaled = buttonX * aspectRatio;
     
+    bool hoveringClose = cursor_over_button(buttonX_scaled, closeButtonY, window);
     bool hoveringSave = cursor_over_button(buttonX_scaled, saveButtonY, window);
     bool hoveringLoad = cursor_over_button(buttonX_scaled, loadButtonY, window);
-    bool hoveringClose = cursor_over_button(buttonX_scaled, closeButtonY, window);
     bool hoveringExport = cursor_over_button(buttonX_scaled, exportButtonY, window);
+    bool hoveringUndo = cursor_over_button(buttonX_scaled, undoButtonY, window);
+    bool hoveringRedo = cursor_over_button(buttonX_scaled, redoButtonY, window);
+    
+    // Draw close button (red) - use same radius for X and Y to make it circular (top)
+    glColor3f(0.9f, 0.2f, 0.2f);
+    glBegin(GL_TRIANGLE_FAN);
+    glVertex2f(buttonX_scaled, closeButtonY);
+    for (int i = 0; i <= 20; ++i) {
+        float angle = (float)i / 20.0f * 6.2831853f;
+        glVertex2f(buttonX_scaled + cosf(angle) * buttonRadius, 
+                   closeButtonY + sinf(angle) * buttonRadius);
+    }
+    glEnd();
+    
+    // Draw close button border
+    glColor3f(0.5f, 0.1f, 0.1f);
+    glBegin(GL_LINE_LOOP);
+    for (int i = 0; i <= 20; ++i) {
+        float angle = (float)i / 20.0f * 6.2831853f;
+        glVertex2f(buttonX_scaled + cosf(angle) * buttonRadius, 
+                   closeButtonY + sinf(angle) * buttonRadius);
+    }
+    glEnd();
+    
+    // Draw hover labels for close button
+    if (hoveringClose) {
+        // Draw label background
+        float labelX = buttonX_scaled + buttonRadius + 0.05f;
+        float labelY = closeButtonY;
+        float labelWidth = 0.18f;
+        float labelHeight = 0.06f;
+        
+        glColor3f(0.1f, 0.1f, 0.15f);
+        glBegin(GL_QUADS);
+        glVertex2f(labelX, labelY + labelHeight * 0.5f);
+        glVertex2f(labelX + labelWidth, labelY + labelHeight * 0.5f);
+        glVertex2f(labelX + labelWidth, labelY - labelHeight * 0.5f);
+        glVertex2f(labelX, labelY - labelHeight * 0.5f);
+        glEnd();
+        
+        // Draw label border
+        glColor3f(0.7f, 0.7f, 0.7f);
+        glBegin(GL_LINE_LOOP);
+        glVertex2f(labelX, labelY + labelHeight * 0.5f);
+        glVertex2f(labelX + labelWidth, labelY + labelHeight * 0.5f);
+        glVertex2f(labelX + labelWidth, labelY - labelHeight * 0.5f);
+        glVertex2f(labelX, labelY - labelHeight * 0.5f);
+        glEnd();
+        
+        // Draw "CLOSE" text
+        float fontSize = labelHeight * 0.65f;
+        float textWidth = get_text_width("CLOSE", fontSize);
+        float textX = labelX + (labelWidth - textWidth) * 0.25f;
+        float textY = labelY - fontSize * 0.25f;
+        draw_text(textX, textY, "CLOSE", fontSize, 1.0f, 1.0f, 1.0f);
+    }
     
     // Draw save button (blue) - use same radius for X and Y to make it circular
     glColor3f(0.2f, 0.4f, 0.9f);
@@ -7626,48 +7860,6 @@ void drawButtons(GLFWwindow* window) {
         draw_text(textX, textY, "LOAD", fontSize, 1.0f, 1.0f, 1.0f);
     }
     
-    // Draw close button (red) - use same radius for X and Y to make it circular
-    glColor3f(0.9f, 0.2f, 0.2f);
-    glBegin(GL_TRIANGLE_FAN);
-    glVertex2f(buttonX_scaled, closeButtonY);
-    for (int i = 0; i <= 20; ++i) {
-        float angle = (float)i / 20.0f * 6.2831853f;
-        glVertex2f(buttonX_scaled + cosf(angle) * buttonRadius, 
-                   closeButtonY + sinf(angle) * buttonRadius);
-    }
-    glEnd();
-    
-    // Draw close button border
-    glColor3f(0.5f, 0.1f, 0.1f);
-    glBegin(GL_LINE_LOOP);
-    for (int i = 0; i <= 20; ++i) {
-        float angle = (float)i / 20.0f * 6.2831853f;
-        glVertex2f(buttonX_scaled + cosf(angle) * buttonRadius, 
-                   closeButtonY + sinf(angle) * buttonRadius);
-    }
-    glEnd();
-    
-    // Draw export button (green) - use same radius for X and Y to make it circular
-    glColor3f(0.3f, 0.8f, 0.3f);
-    glBegin(GL_TRIANGLE_FAN);
-    glVertex2f(buttonX_scaled, exportButtonY);
-    for (int i = 0; i <= 20; ++i) {
-        float angle = (float)i / 20.0f * 6.2831853f;
-        glVertex2f(buttonX_scaled + cosf(angle) * buttonRadius, 
-                   exportButtonY + sinf(angle) * buttonRadius);
-    }
-    glEnd();
-    
-    // Draw export button border
-    glColor3f(0.15f, 0.5f, 0.15f);
-    glBegin(GL_LINE_LOOP);
-    for (int i = 0; i <= 20; ++i) {
-        float angle = (float)i / 20.0f * 6.2831853f;
-        glVertex2f(buttonX_scaled + cosf(angle) * buttonRadius, 
-                   exportButtonY + sinf(angle) * buttonRadius);
-    }
-    glEnd();
-    
     // Draw hover labels for close button
     if (hoveringClose) {
         // Draw label background
@@ -7701,6 +7893,27 @@ void drawButtons(GLFWwindow* window) {
         draw_text(textX, textY, "CLOSE", fontSize, 1.0f, 1.0f, 1.0f);
     }
     
+    // Draw export button (green) - use same radius for X and Y to make it circular
+    glColor3f(0.3f, 0.8f, 0.3f);
+    glBegin(GL_TRIANGLE_FAN);
+    glVertex2f(buttonX_scaled, exportButtonY);
+    for (int i = 0; i <= 20; ++i) {
+        float angle = (float)i / 20.0f * 6.2831853f;
+        glVertex2f(buttonX_scaled + cosf(angle) * buttonRadius, 
+                   exportButtonY + sinf(angle) * buttonRadius);
+    }
+    glEnd();
+    
+    // Draw export button border
+    glColor3f(0.15f, 0.5f, 0.15f);
+    glBegin(GL_LINE_LOOP);
+    for (int i = 0; i <= 20; ++i) {
+        float angle = (float)i / 20.0f * 6.2831853f;
+        glVertex2f(buttonX_scaled + cosf(angle) * buttonRadius, 
+                   exportButtonY + sinf(angle) * buttonRadius);
+    }
+    glEnd();
+    
     // Draw hover labels for export button
     if (hoveringExport) {
         // Draw label background
@@ -7733,9 +7946,123 @@ void drawButtons(GLFWwindow* window) {
         float textY = labelY - fontSize * 0.25f;
         draw_text(textX, textY, "EXPORT", fontSize, 1.0f, 1.0f, 1.0f);
     }
+    
+    // Draw undo button (purple) - use same radius for X and Y to make it circular
+    bool canUndo = (undoHistoryIndex > 0);
+    glColor3f(canUndo ? 0.7f : 0.4f, 0.3f, canUndo ? 0.8f : 0.5f);  // Purple, dimmed if disabled
+    glBegin(GL_TRIANGLE_FAN);
+    glVertex2f(buttonX_scaled, undoButtonY);
+    for (int i = 0; i <= 20; ++i) {
+        float angle = (float)i / 20.0f * 6.2831853f;
+        glVertex2f(buttonX_scaled + cosf(angle) * buttonRadius, 
+                   undoButtonY + sinf(angle) * buttonRadius);
+    }
+    glEnd();
+    
+    // Draw undo button border
+    glColor3f(canUndo ? 0.4f : 0.2f, 0.15f, canUndo ? 0.5f : 0.3f);
+    glBegin(GL_LINE_LOOP);
+    for (int i = 0; i <= 20; ++i) {
+        float angle = (float)i / 20.0f * 6.2831853f;
+        glVertex2f(buttonX_scaled + cosf(angle) * buttonRadius, 
+                   undoButtonY + sinf(angle) * buttonRadius);
+    }
+    glEnd();
+    
+    // Draw redo button (orange) - use same radius for X and Y to make it circular
+    bool canRedo = (undoHistoryIndex >= 0 && undoHistoryIndex < undoHistoryCount - 1);
+    glColor3f(canRedo ? 1.0f : 0.6f, canRedo ? 0.5f : 0.3f, 0.2f);  // Orange, dimmed if disabled
+    glBegin(GL_TRIANGLE_FAN);
+    glVertex2f(buttonX_scaled, redoButtonY);
+    for (int i = 0; i <= 20; ++i) {
+        float angle = (float)i / 20.0f * 6.2831853f;
+        glVertex2f(buttonX_scaled + cosf(angle) * buttonRadius, 
+                   redoButtonY + sinf(angle) * buttonRadius);
+    }
+    glEnd();
+    
+    // Draw redo button border
+    glColor3f(canRedo ? 0.6f : 0.4f, canRedo ? 0.3f : 0.2f, 0.1f);
+    glBegin(GL_LINE_LOOP);
+    for (int i = 0; i <= 20; ++i) {
+        float angle = (float)i / 20.0f * 6.2831853f;
+        glVertex2f(buttonX_scaled + cosf(angle) * buttonRadius, 
+                   redoButtonY + sinf(angle) * buttonRadius);
+    }
+    glEnd();
+    
+    // Draw hover labels for undo button
+    if (hoveringUndo) {
+        // Draw label background
+        float labelX = buttonX_scaled + buttonRadius + 0.05f;
+        float labelY = undoButtonY;
+        float labelWidth = 0.18f;
+        float labelHeight = 0.06f;
+        
+        glColor3f(0.1f, 0.1f, 0.15f);
+        glBegin(GL_QUADS);
+        glVertex2f(labelX, labelY + labelHeight * 0.5f);
+        glVertex2f(labelX + labelWidth, labelY + labelHeight * 0.5f);
+        glVertex2f(labelX + labelWidth, labelY - labelHeight * 0.5f);
+        glVertex2f(labelX, labelY - labelHeight * 0.5f);
+        glEnd();
+        
+        // Draw label border
+        glColor3f(0.7f, 0.7f, 0.7f);
+        glBegin(GL_LINE_LOOP);
+        glVertex2f(labelX, labelY + labelHeight * 0.5f);
+        glVertex2f(labelX + labelWidth, labelY + labelHeight * 0.5f);
+        glVertex2f(labelX + labelWidth, labelY - labelHeight * 0.5f);
+        glVertex2f(labelX, labelY - labelHeight * 0.5f);
+        glEnd();
+        
+        // Draw "UNDO" text
+        float fontSize = labelHeight * 0.65f;
+        float textWidth = get_text_width("UNDO", fontSize);
+        float textX = labelX + (labelWidth - textWidth) * 0.25f;
+        float textY = labelY - fontSize * 0.25f;
+        draw_text(textX, textY, "UNDO", fontSize, 1.0f, 1.0f, 1.0f);
+    }
+    
+    // Draw hover labels for redo button
+    if (hoveringRedo) {
+        // Draw label background
+        float labelX = buttonX_scaled + buttonRadius + 0.05f;
+        float labelY = redoButtonY;
+        float labelWidth = 0.18f;
+        float labelHeight = 0.06f;
+        
+        glColor3f(0.1f, 0.1f, 0.15f);
+        glBegin(GL_QUADS);
+        glVertex2f(labelX, labelY + labelHeight * 0.5f);
+        glVertex2f(labelX + labelWidth, labelY + labelHeight * 0.5f);
+        glVertex2f(labelX + labelWidth, labelY - labelHeight * 0.5f);
+        glVertex2f(labelX, labelY - labelHeight * 0.5f);
+        glEnd();
+        
+        // Draw label border
+        glColor3f(0.7f, 0.7f, 0.7f);
+        glBegin(GL_LINE_LOOP);
+        glVertex2f(labelX, labelY + labelHeight * 0.5f);
+        glVertex2f(labelX + labelWidth, labelY + labelHeight * 0.5f);
+        glVertex2f(labelX + labelWidth, labelY - labelHeight * 0.5f);
+        glVertex2f(labelX, labelY - labelHeight * 0.5f);
+        glEnd();
+        
+        // Draw "REDO" text
+        float fontSize = labelHeight * 0.65f;
+        float textWidth = get_text_width("REDO", fontSize);
+        float textX = labelX + (labelWidth - textWidth) * 0.25f;
+        float textY = labelY - fontSize * 0.25f;
+        draw_text(textX, textY, "REDO", fontSize, 1.0f, 1.0f, 1.0f);
+    }
 }
 
 void initialize_flowchart() {
+    // Reset undo history
+    undoHistoryCount = 0;
+    undoHistoryIndex = -1;
+    
     // Create START node at grid position (0, 0)
     nodes[0].x = grid_to_world_x(0);
     nodes[0].y = grid_to_world_y(0);
@@ -7758,6 +8085,10 @@ void initialize_flowchart() {
     
     nodeCount = 2;
     
+    // Reset undo history
+    undoHistoryCount = 0;
+    undoHistoryIndex = -1;
+    
     // Connect START to END
     connections[0].fromNode = 0;
     connections[0].toNode = 1;
@@ -7765,6 +8096,10 @@ void initialize_flowchart() {
     
     // Initialize IF blocks
     ifBlockCount = 0;
+    cycleBlockCount = 0;
+    
+    // Save initial state
+    save_state_for_undo();
 }
 
 int main(void) {
