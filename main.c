@@ -195,8 +195,8 @@ NodeMenuItem nodeMenuItems[] = {
 };
 int nodeMenuItemCount = 2;
 
-// Deletion toggle (off by default)
-bool deletionEnabled = false;
+// Deletion toggle (enabled by default)
+bool deletionEnabled = true;
 
 // Grid helper functions
 double grid_to_world_x(int gridX) {

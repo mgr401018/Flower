@@ -57,8 +57,6 @@ void delete_node(int nodeIndex) {
         return;
     }
     
-    save_state_for_undo();
-    
     // Special handling for IF and CONVERGE nodes
     if (nodes[nodeIndex].type == NODE_IF || nodes[nodeIndex].type == NODE_CONVERGE) {
         // Find the IF block that this node belongs to
@@ -351,6 +349,12 @@ void delete_node(int nodeIndex) {
                 }
             }
             
+            // Rebuild variable table after deletion
+            rebuild_variable_table();
+            
+            // Save state AFTER operation completes (for redo to work correctly)
+            save_state_for_undo();
+            
             return;  // Done handling IF/CONVERGE deletion
         }
     }
@@ -619,6 +623,12 @@ void delete_node(int nodeIndex) {
                     }
                 }
             }
+            
+            // Rebuild variable table after deletion
+            rebuild_variable_table();
+            
+            // Save state AFTER operation completes (for redo to work correctly)
+            save_state_for_undo();
             
             return;  // Done handling CYCLE/CYCLE_END deletion
         }
@@ -3655,14 +3665,8 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
                     } else if (popupMenu.type == MENU_TYPE_NODE) {
                         // Handle node menu actions
                         if (nodeMenuItems[clickedItem].action == 0) {
-                            // Delete action - only if deletion is enabled
-                            if (deletionEnabled) {
-                                delete_node(popupMenu.nodeIndex);
-                            } else {
-                                tinyfd_messageBox("Deletion Disabled", 
-                                    "Deletion is currently disabled. Press 'D' to enable it.", 
-                                    "ok", "warning", 1);
-                            }
+                            // Delete action
+                            delete_node(popupMenu.nodeIndex);
                         } else if (nodeMenuItems[clickedItem].action == 1) {
                             // Value action - edit node value
                             edit_node_value(popupMenu.nodeIndex);

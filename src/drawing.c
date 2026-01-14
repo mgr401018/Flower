@@ -129,7 +129,7 @@ void drawFlowNode(const FlowNode *n) {
     if (n->type == NODE_START) {
         // Start node: green rounded rectangle
         glColor3f(0.3f, 0.9f, 0.3f); // green for start
-        float radius = (n->width < n->height ? n->width : n->height) * 0.15f; // 15% of smaller dimension
+        float radius = (n->width < n->height ? n->width : n->height) * 0.30f; // 25% of smaller dimension
         draw_rounded_rectangle((float)n->x, (float)n->y, n->width, n->height, radius, true);
 
     // Border
@@ -159,7 +159,7 @@ void drawFlowNode(const FlowNode *n) {
     } else if (n->type == NODE_END) {
         // End node: red rounded rectangle
         glColor3f(0.9f, 0.3f, 0.3f); // red for end
-        float radius = (n->width < n->height ? n->width : n->height) * 0.15f; // 15% of smaller dimension
+        float radius = (n->width < n->height ? n->width : n->height) * 0.30f; // 25% of smaller dimension
         draw_rounded_rectangle((float)n->x, (float)n->y, n->width, n->height, radius, true);
         
         // Border
