@@ -3681,7 +3681,19 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
                 // Clicked outside menu, close it
                 popupMenu.active = false;
             }
+        } else {
+            // Not clicking on button or menu - start panning
+            isPanning = true;
+            panStartX = cursorX;
+            panStartY = cursorY;
+            panStartScrollX = scrollOffsetX;
+            panStartScrollY = scrollOffsetY;
         }
+    }
+    
+    if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_RELEASE) {
+        // Stop panning when left button is released
+        isPanning = false;
     }
     
     if (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_PRESS) {

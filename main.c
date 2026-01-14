@@ -30,6 +30,11 @@
 // Global variables for cursor position
 double cursorX = 0.0;
 double cursorY = 0.0;
+bool isPanning = false;
+double panStartX = 0.0;
+double panStartY = 0.0;
+double panStartScrollX = 0.0;
+double panStartScrollY = 0.0;
 
 // Hovered connection tracking
 int hoveredConnection = -1;
@@ -261,6 +266,17 @@ void cursor_position_callback(GLFWwindow* window, double xpos, double ypos) {
     // Don't apply scroll offset here - we'll handle it where needed
     cursorX = (xpos / width) * 2.0 * aspectRatio - aspectRatio;
     cursorY = -((ypos / height) * 2.0 - 1.0);
+    
+    // Handle mouse panning
+    if (isPanning) {
+        // Calculate mouse movement delta
+        double deltaX = cursorX - panStartX;
+        double deltaY = cursorY - panStartY;
+        
+        // Update scroll offsets (inverse movement - dragging right moves content left)
+        scrollOffsetX = panStartScrollX - deltaX;
+        scrollOffsetY = panStartScrollY - deltaY;
+    }
 }
 
 // Scroll callback for panning (both horizontal and vertical)

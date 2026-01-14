@@ -157,6 +157,11 @@ extern int hoveredConnection;
 extern double scrollOffsetX;
 extern double scrollOffsetY;
 extern bool deletionEnabled;
+extern bool isPanning;
+extern double panStartX;
+extern double panStartY;
+extern double panStartScrollX;
+extern double panStartScrollY;
 
 // Constants
 extern const double GRID_CELL_SIZE;
