@@ -617,7 +617,11 @@ void drawButtons(GLFWwindow* window) {
     bool hoveringRedo = cursor_over_button(buttonX_scaled, redoButtonY, window);
     
     // Draw close button (red) - use same radius for X and Y to make it circular (top)
-    glColor3f(0.9f, 0.2f, 0.2f);
+    if (hoveringClose) {
+        glColor3f(0.9f + 0.1f * 0.3f, 0.2f + 0.8f * 0.3f, 0.2f + 0.8f * 0.3f);  // Lighter when hovered
+    } else {
+        glColor3f(0.9f, 0.2f, 0.2f);
+    }
     glBegin(GL_TRIANGLE_FAN);
     glVertex2f(buttonX_scaled, closeButtonY);
     for (int i = 0; i <= 20; ++i) {
@@ -628,7 +632,11 @@ void drawButtons(GLFWwindow* window) {
     glEnd();
     
     // Draw close button border
-    glColor3f(0.5f, 0.1f, 0.1f);
+    if (hoveringClose) {
+        glColor3f(0.5f + 0.5f * 0.3f, 0.1f + 0.9f * 0.3f, 0.1f + 0.9f * 0.3f);  // Lighter when hovered
+    } else {
+        glColor3f(0.5f, 0.1f, 0.1f);
+    }
     glBegin(GL_LINE_LOOP);
     for (int i = 0; i <= 20; ++i) {
         float angle = (float)i / 20.0f * 6.2831853f;
@@ -671,7 +679,11 @@ void drawButtons(GLFWwindow* window) {
     }
     
     // Draw save button (blue) - use same radius for X and Y to make it circular
-    glColor3f(0.2f, 0.4f, 0.9f);
+    if (hoveringSave) {
+        glColor3f(0.2f + 0.8f * 0.3f, 0.4f + 0.6f * 0.3f, 0.9f + 0.1f * 0.3f);  // Lighter when hovered
+    } else {
+        glColor3f(0.2f, 0.4f, 0.9f);
+    }
     glBegin(GL_TRIANGLE_FAN);
     glVertex2f(buttonX_scaled, saveButtonY);
     for (int i = 0; i <= 20; ++i) {
@@ -682,7 +694,11 @@ void drawButtons(GLFWwindow* window) {
     glEnd();
     
     // Draw save button border
-    glColor3f(0.1f, 0.2f, 0.5f);
+    if (hoveringSave) {
+        glColor3f(0.1f + 0.9f * 0.3f, 0.2f + 0.8f * 0.3f, 0.5f + 0.5f * 0.3f);  // Lighter when hovered
+    } else {
+        glColor3f(0.1f, 0.2f, 0.5f);
+    }
     glBegin(GL_LINE_LOOP);
     for (int i = 0; i <= 20; ++i) {
         float angle = (float)i / 20.0f * 6.2831853f;
@@ -692,7 +708,11 @@ void drawButtons(GLFWwindow* window) {
     glEnd();
     
     // Draw load button (yellow) - use same radius for X and Y to make it circular
-    glColor3f(0.95f, 0.9f, 0.25f);
+    if (hoveringLoad) {
+        glColor3f(0.95f + 0.05f * 0.3f, 0.9f + 0.1f * 0.3f, 0.25f + 0.75f * 0.3f);  // Lighter when hovered
+    } else {
+        glColor3f(0.95f, 0.9f, 0.25f);
+    }
     glBegin(GL_TRIANGLE_FAN);
     glVertex2f(buttonX_scaled, loadButtonY);
     for (int i = 0; i <= 20; ++i) {
@@ -703,7 +723,11 @@ void drawButtons(GLFWwindow* window) {
     glEnd();
     
     // Draw load button border
-    glColor3f(0.5f, 0.5f, 0.1f);
+    if (hoveringLoad) {
+        glColor3f(0.5f + 0.5f * 0.3f, 0.5f + 0.5f * 0.3f, 0.1f + 0.9f * 0.3f);  // Lighter when hovered
+    } else {
+        glColor3f(0.5f, 0.5f, 0.1f);
+    }
     glBegin(GL_LINE_LOOP);
     for (int i = 0; i <= 20; ++i) {
         float angle = (float)i / 20.0f * 6.2831853f;
@@ -815,7 +839,11 @@ void drawButtons(GLFWwindow* window) {
     }
     
     // Draw export button (green) - use same radius for X and Y to make it circular
-    glColor3f(0.3f, 0.8f, 0.3f);
+    if (hoveringExport) {
+        glColor3f(0.3f + 0.7f * 0.3f, 0.8f + 0.2f * 0.3f, 0.3f + 0.7f * 0.3f);  // Lighter when hovered
+    } else {
+        glColor3f(0.3f, 0.8f, 0.3f);
+    }
     glBegin(GL_TRIANGLE_FAN);
     glVertex2f(buttonX_scaled, exportButtonY);
     for (int i = 0; i <= 20; ++i) {
@@ -826,7 +854,11 @@ void drawButtons(GLFWwindow* window) {
     glEnd();
     
     // Draw export button border
-    glColor3f(0.15f, 0.5f, 0.15f);
+    if (hoveringExport) {
+        glColor3f(0.15f + 0.85f * 0.3f, 0.5f + 0.5f * 0.3f, 0.15f + 0.85f * 0.3f);  // Lighter when hovered
+    } else {
+        glColor3f(0.15f, 0.5f, 0.15f);
+    }
     glBegin(GL_LINE_LOOP);
     for (int i = 0; i <= 20; ++i) {
         float angle = (float)i / 20.0f * 6.2831853f;
@@ -870,7 +902,14 @@ void drawButtons(GLFWwindow* window) {
     
     // Draw undo button (purple) - use same radius for X and Y to make it circular
     bool canUndo = (undoHistoryIndex > 0);
-    glColor3f(canUndo ? 0.7f : 0.4f, 0.3f, canUndo ? 0.8f : 0.5f);  // Purple, dimmed if disabled
+    float undoR = canUndo ? 0.7f : 0.4f;
+    float undoG = 0.3f;
+    float undoB = canUndo ? 0.8f : 0.5f;
+    if (hoveringUndo) {
+        glColor3f(undoR + (1.0f - undoR) * 0.3f, undoG + (1.0f - undoG) * 0.3f, undoB + (1.0f - undoB) * 0.3f);  // Lighter when hovered
+    } else {
+        glColor3f(undoR, undoG, undoB);
+    }
     glBegin(GL_TRIANGLE_FAN);
     glVertex2f(buttonX_scaled, undoButtonY);
     for (int i = 0; i <= 20; ++i) {
@@ -881,7 +920,14 @@ void drawButtons(GLFWwindow* window) {
     glEnd();
     
     // Draw undo button border
-    glColor3f(canUndo ? 0.4f : 0.2f, 0.15f, canUndo ? 0.5f : 0.3f);
+    float undoBorderR = canUndo ? 0.4f : 0.2f;
+    float undoBorderG = 0.15f;
+    float undoBorderB = canUndo ? 0.5f : 0.3f;
+    if (hoveringUndo) {
+        glColor3f(undoBorderR + (1.0f - undoBorderR) * 0.3f, undoBorderG + (1.0f - undoBorderG) * 0.3f, undoBorderB + (1.0f - undoBorderB) * 0.3f);  // Lighter when hovered
+    } else {
+        glColor3f(undoBorderR, undoBorderG, undoBorderB);
+    }
     glBegin(GL_LINE_LOOP);
     for (int i = 0; i <= 20; ++i) {
         float angle = (float)i / 20.0f * 6.2831853f;
@@ -892,7 +938,14 @@ void drawButtons(GLFWwindow* window) {
     
     // Draw redo button (orange) - use same radius for X and Y to make it circular
     bool canRedo = (undoHistoryIndex >= 0 && undoHistoryIndex < undoHistoryCount - 1);
-    glColor3f(canRedo ? 1.0f : 0.6f, canRedo ? 0.5f : 0.3f, 0.2f);  // Orange, dimmed if disabled
+    float redoR = canRedo ? 1.0f : 0.6f;
+    float redoG = canRedo ? 0.5f : 0.3f;
+    float redoB = 0.2f;
+    if (hoveringRedo) {
+        glColor3f(redoR + (1.0f - redoR) * 0.3f, redoG + (1.0f - redoG) * 0.3f, redoB + (1.0f - redoB) * 0.3f);  // Lighter when hovered
+    } else {
+        glColor3f(redoR, redoG, redoB);
+    }
     glBegin(GL_TRIANGLE_FAN);
     glVertex2f(buttonX_scaled, redoButtonY);
     for (int i = 0; i <= 20; ++i) {
@@ -903,7 +956,14 @@ void drawButtons(GLFWwindow* window) {
     glEnd();
     
     // Draw redo button border
-    glColor3f(canRedo ? 0.6f : 0.4f, canRedo ? 0.3f : 0.2f, 0.1f);
+    float redoBorderR = canRedo ? 0.6f : 0.4f;
+    float redoBorderG = canRedo ? 0.3f : 0.2f;
+    float redoBorderB = 0.1f;
+    if (hoveringRedo) {
+        glColor3f(redoBorderR + (1.0f - redoBorderR) * 0.3f, redoBorderG + (1.0f - redoBorderG) * 0.3f, redoBorderB + (1.0f - redoBorderB) * 0.3f);  // Lighter when hovered
+    } else {
+        glColor3f(redoBorderR, redoBorderG, redoBorderB);
+    }
     glBegin(GL_LINE_LOOP);
     for (int i = 0; i <= 20; ++i) {
         float angle = (float)i / 20.0f * 6.2831853f;
