@@ -97,6 +97,8 @@ bool is_valid_variable_name(const char* name);
 Variable* find_variable(const char* name);
 bool variable_name_exists(const char* name, int excludeNodeIndex);
 VariableType detect_literal_type(const char* value);
+void extract_array_accesses(const char* expr, char arrayNames[][MAX_VAR_NAME_LENGTH], 
+                                   char indexExprs[][MAX_VALUE_LENGTH], int* accessCount);
 
 // Cycle helper utilities
 int find_cycle_block_by_cycle_node(int nodeIndex) {

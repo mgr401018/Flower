@@ -19,6 +19,9 @@ int get_if_branch_type(int connIndex);
 float get_cycle_loopback_offset(int cycleIndex);
 bool cursor_over_button(float buttonX, float buttonY, GLFWwindow* window);
 
+// Forward declaration for function defined later in this file
+void drawPopupMenu(GLFWwindow* window);
+
 static void draw_rounded_rectangle(float x, float y, float width, float height, float radius, bool filled) {
     float halfW = width * 0.5f;
     float halfH = height * 0.5f;
