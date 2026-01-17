@@ -603,6 +603,116 @@ void drawPopupMenu(GLFWwindow* window) {
 }
 
 
+// Helper function to draw X icon (for close button)
+static void draw_close_icon(float centerX, float centerY, float size, float r, float g, float b) {
+    glColor3f(r, g, b);
+    float thickness = size * 0.04f;  // Thickness of the X lines
+    
+    // Draw thicker X using multiple parallel lines
+    for (float offset = -thickness; offset <= thickness; offset += thickness * 0.25f) {
+        glBegin(GL_LINES);
+        // Top-left to bottom-right
+        glVertex2f(centerX - size * 0.35f + offset, centerY + size * 0.35f);
+        glVertex2f(centerX + size * 0.35f + offset, centerY - size * 0.35f);
+        // Top-right to bottom-left
+        glVertex2f(centerX + size * 0.35f + offset, centerY + size * 0.35f);
+        glVertex2f(centerX - size * 0.35f + offset, centerY - size * 0.35f);
+        glEnd();
+    }
+}
+
+// Helper function to draw down arrow (for save button)
+static void draw_down_arrow(float centerX, float centerY, float size, float r, float g, float b) {
+    glColor3f(r, g, b);
+    glBegin(GL_LINES);
+    // Vertical line (centered)
+    glVertex2f(centerX, centerY + size * 0.35f);
+    glVertex2f(centerX, centerY - size * 0.35f);
+    glEnd();
+    
+    // Arrow head (larger triangular head)
+    glBegin(GL_TRIANGLES);
+    glVertex2f(centerX, centerY - size * 0.35f);
+    glVertex2f(centerX - size * 0.25f, centerY - size * 0.15f);
+    glVertex2f(centerX + size * 0.25f, centerY - size * 0.15f);
+    glEnd();
+}
+
+// Helper function to draw up arrow (for load button)
+static void draw_up_arrow(float centerX, float centerY, float size, float r, float g, float b) {
+    glColor3f(r, g, b);
+    glBegin(GL_LINES);
+    // Vertical line (centered)
+    glVertex2f(centerX, centerY - size * 0.35f);
+    glVertex2f(centerX, centerY + size * 0.35f);
+    glEnd();
+    
+    // Arrow head (larger triangular head)
+    glBegin(GL_TRIANGLES);
+    glVertex2f(centerX, centerY + size * 0.35f);
+    glVertex2f(centerX - size * 0.25f, centerY + size * 0.15f);
+    glVertex2f(centerX + size * 0.25f, centerY + size * 0.15f);
+    glEnd();
+}
+
+// Helper function to draw terminal icon (for export button)
+static void draw_terminal_icon(float centerX, float centerY, float size, float r, float g, float b) {
+    glColor3f(r, g, b);
+    float thickness = size * 0.04f;  // Match the thickness of the X
+    float sz = size * 0.25f;
+    
+    // Draw thicker > and _ using multiple parallel lines
+    for (float offset = -thickness; offset <= thickness; offset += thickness * 0.25f) {
+        // Draw the ">" character
+        glBegin(GL_LINES);
+        glVertex2f(centerX - sz * 0.8f + offset, centerY + sz);
+        glVertex2f(centerX + sz * 0.2f + offset, centerY);
+        glVertex2f(centerX + sz * 0.2f + offset, centerY);
+        glVertex2f(centerX - sz * 0.8f + offset, centerY - sz);
+        glEnd();
+        
+        // Draw the underscore "_"
+        glBegin(GL_LINES);
+        glVertex2f(centerX + sz * 0.8f + offset, centerY - sz * 0.8f);
+        glVertex2f(centerX + sz * 1.8f + offset, centerY - sz * 0.8f);
+        glEnd();
+    }
+}
+
+// Helper function to draw left arrow (for undo button)
+static void draw_left_arrow(float centerX, float centerY, float size, float r, float g, float b) {
+    glColor3f(r, g, b);
+    glBegin(GL_LINES);
+    // Horizontal line
+    glVertex2f(centerX - size * 0.35f, centerY);
+    glVertex2f(centerX + size * 0.35f, centerY);
+    glEnd();
+    
+    // Arrow head
+    glBegin(GL_TRIANGLES);
+    glVertex2f(centerX - size * 0.35f, centerY);
+    glVertex2f(centerX - size * 0.15f, centerY - size * 0.2f);
+    glVertex2f(centerX - size * 0.15f, centerY + size * 0.2f);
+    glEnd();
+}
+
+// Helper function to draw right arrow (for redo button)
+static void draw_right_arrow(float centerX, float centerY, float size, float r, float g, float b) {
+    glColor3f(r, g, b);
+    glBegin(GL_LINES);
+    // Horizontal line
+    glVertex2f(centerX - size * 0.35f, centerY);
+    glVertex2f(centerX + size * 0.35f, centerY);
+    glEnd();
+    
+    // Arrow head
+    glBegin(GL_TRIANGLES);
+    glVertex2f(centerX + size * 0.35f, centerY);
+    glVertex2f(centerX + size * 0.15f, centerY - size * 0.2f);
+    glVertex2f(centerX + size * 0.15f, centerY + size * 0.2f);
+    glEnd();
+}
+
 void drawButtons(GLFWwindow* window) {
     int width, height;
     glfwGetWindowSize(window, &width, &height);
@@ -611,6 +721,10 @@ void drawButtons(GLFWwindow* window) {
     // Convert button positions to new coordinate system (X is now -aspectRatio to aspectRatio)
     // buttonX was -0.95 in old system (-1 to 1), now map to same visual position
     float buttonX_scaled = buttonX * aspectRatio;
+    
+    // Icon size and darkening factor
+    float iconSize = buttonRadius * 1.2f;
+    float darkenFactor = 0.6f;  // Make icon darker than button
     
     bool hoveringClose = cursor_over_button(buttonX_scaled, closeButtonY, window);
     bool hoveringSave = cursor_over_button(buttonX_scaled, saveButtonY, window);
@@ -647,6 +761,12 @@ void drawButtons(GLFWwindow* window) {
                    closeButtonY + sinf(angle) * buttonRadius);
     }
     glEnd();
+    
+    // Draw close icon (X) - darker shade of button color
+    float closeIconR = 0.9f * darkenFactor;
+    float closeIconG = 0.2f * darkenFactor;
+    float closeIconB = 0.2f * darkenFactor;
+    draw_close_icon(buttonX_scaled, closeButtonY, iconSize, closeIconR, closeIconG, closeIconB);
     
     // Draw hover labels for close button
     if (hoveringClose) {
@@ -710,6 +830,12 @@ void drawButtons(GLFWwindow* window) {
     }
     glEnd();
     
+    // Draw save icon (down arrow) - darker shade of button color
+    float saveIconR = 0.2f * darkenFactor;
+    float saveIconG = 0.4f * darkenFactor;
+    float saveIconB = 0.9f * darkenFactor;
+    draw_down_arrow(buttonX_scaled, saveButtonY, iconSize, saveIconR, saveIconG, saveIconB);
+    
     // Draw load button (yellow) - use same radius for X and Y to make it circular
     if (hoveringLoad) {
         glColor3f(0.95f + 0.05f * 0.3f, 0.9f + 0.1f * 0.3f, 0.25f + 0.75f * 0.3f);  // Lighter when hovered
@@ -738,6 +864,12 @@ void drawButtons(GLFWwindow* window) {
                    loadButtonY + sinf(angle) * buttonRadius);
     }
     glEnd();
+    
+    // Draw load icon (up arrow) - darker shade of button color
+    float loadIconR = 0.95f * darkenFactor;
+    float loadIconG = 0.9f * darkenFactor;
+    float loadIconB = 0.25f * darkenFactor;
+    draw_up_arrow(buttonX_scaled, loadButtonY, iconSize, loadIconR, loadIconG, loadIconB);
     
         // Draw hover labels
         if (hoveringSave) {
@@ -870,6 +1002,12 @@ void drawButtons(GLFWwindow* window) {
     }
     glEnd();
     
+    // Draw export icon (terminal) - darker shade of button color
+    float exportIconR = 0.3f * darkenFactor;
+    float exportIconG = 0.8f * darkenFactor;
+    float exportIconB = 0.3f * darkenFactor;
+    draw_terminal_icon(buttonX_scaled, exportButtonY, iconSize, exportIconR, exportIconG, exportIconB);
+    
     // Draw hover labels for export button
     if (hoveringExport) {
         // Draw label background
@@ -939,6 +1077,12 @@ void drawButtons(GLFWwindow* window) {
     }
     glEnd();
     
+    // Draw undo icon (left arrow) - darker shade of button color
+    float undoIconR = undoR * darkenFactor;
+    float undoIconG = undoG * darkenFactor;
+    float undoIconB = undoB * darkenFactor;
+    draw_left_arrow(buttonX_scaled, undoButtonY, iconSize, undoIconR, undoIconG, undoIconB);
+    
     // Draw redo button (orange) - use same radius for X and Y to make it circular
     bool canRedo = (undoHistoryIndex >= 0 && undoHistoryIndex < undoHistoryCount - 1);
     float redoR = canRedo ? 1.0f : 0.6f;
@@ -974,6 +1118,12 @@ void drawButtons(GLFWwindow* window) {
                    redoButtonY + sinf(angle) * buttonRadius);
     }
     glEnd();
+    
+    // Draw redo icon (right arrow) - darker shade of button color
+    float redoIconR = redoR * darkenFactor;
+    float redoIconG = redoG * darkenFactor;
+    float redoIconB = redoB * darkenFactor;
+    draw_right_arrow(buttonX_scaled, redoButtonY, iconSize, redoIconR, redoIconG, redoIconB);
     
     // Draw hover labels for undo button
     if (hoveringUndo) {
