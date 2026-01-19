@@ -88,7 +88,7 @@ void draw_block_if(const struct FlowNode *n) {
     draw_text(trueLabelX, trueLabelY, "True", fontSize, 0.0f, 0.6f, 0.0f);  // Green text
     
     // Draw "False" label on the right side
-    float falseLabelX = n->x + halfW + 0.15f;  // Moved further to the right
+    float falseLabelX = n->x + halfW + 0.02f;  // Used to be 0.15
     float falseLabelY = n->y + 0.15f;  // Moved up a bit
     draw_text(falseLabelX, falseLabelY, "False", fontSize, 0.8f, 0.0f, 0.0f);  // Red text
     

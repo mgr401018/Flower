@@ -34,7 +34,10 @@ SRCS = main.c \
        $(SRC_DIR)/block_converge.c \
        $(SRC_DIR)/block_cycle.c \
        $(SRC_DIR)/block_cycle_end.c \
-       $(SRC_DIR)/code_exporter.c
+       $(SRC_DIR)/code_exporter.c \
+       $(SRC_DIR)/file_io.c \
+       $(SRC_DIR)/drawing.c \
+       $(SRC_DIR)/actions.c
 
 # Object files (in build directory)
 OBJS = $(SRCS:%.c=$(BUILD_DIR)/%.o)
@@ -58,9 +61,19 @@ endif
 # Default target
 all: $(BUILD_DIR)/$(TARGET)
 
-# Create build directory structure
+# Create build directory structure (OS-specific)
 $(BUILD_DIR)/%.o: | $(BUILD_DIR) $(BUILD_DIR)/$(SRC_DIR) $(BUILD_DIR)/$(IMPORTS_DIR)
 
+ifeq ($(UNAME_S),Windows)
+$(BUILD_DIR):
+	if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
+
+$(BUILD_DIR)/$(SRC_DIR):
+	if not exist "$(BUILD_DIR)/$(SRC_DIR)" mkdir "$(BUILD_DIR)/$(SRC_DIR)"
+
+$(BUILD_DIR)/$(IMPORTS_DIR):
+	if not exist "$(BUILD_DIR)/$(IMPORTS_DIR)" mkdir "$(BUILD_DIR)/$(IMPORTS_DIR)"
+else
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
@@ -69,6 +82,7 @@ $(BUILD_DIR)/$(SRC_DIR):
 
 $(BUILD_DIR)/$(IMPORTS_DIR):
 	mkdir -p $(BUILD_DIR)/$(IMPORTS_DIR)
+endif
 
 # Link object files to create executable
 $(BUILD_DIR)/$(TARGET): $(OBJS)
@@ -78,7 +92,17 @@ $(BUILD_DIR)/$(TARGET): $(OBJS)
 $(SRC_DIR)/embedded_font.h: $(IMPORTS_DIR)/DejaVuSansMono.ttf
 	xxd -i $< > $@
 
-# Compile source files to object files in build directory
+# Compile source files to object files in build directory (OS-specific mkdir)
+ifeq ($(UNAME_S),Windows)
+$(BUILD_DIR)/%.o: %.c
+	@if not exist "$(subst /,\,$(dir $@))" mkdir "$(subst /,\,$(dir $@))"
+	$(CC) $(CFLAGS) -c $< -o $@
+
+# text_renderer.c depends on embedded_font.h
+$(BUILD_DIR)/$(SRC_DIR)/text_renderer.o: $(SRC_DIR)/text_renderer.c $(SRC_DIR)/embedded_font.h
+	@if not exist "$(subst /,\,$(dir $@))" mkdir "$(subst /,\,$(dir $@))"
+	$(CC) $(CFLAGS) -c $< -o $@
+else
 $(BUILD_DIR)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -87,15 +111,22 @@ $(BUILD_DIR)/%.o: %.c
 $(BUILD_DIR)/$(SRC_DIR)/text_renderer.o: $(SRC_DIR)/text_renderer.c $(SRC_DIR)/embedded_font.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
+endif
 
 # Run the program
 run: $(BUILD_DIR)/$(TARGET)
 	./$(BUILD_DIR)/$(TARGET)
 
-# Clean build artifacts
+# Clean build artifacts (OS-specific remove)
 clean:
+ifeq ($(UNAME_S),Windows)
+	if exist "$(BUILD_DIR)" rmdir /S /Q "$(BUILD_DIR)"
+	if exist "$(TARGET)" del /Q "$(TARGET)"
+	if exist "triangle.exe" del /Q "triangle.exe"
+else
 	rm -rf $(BUILD_DIR)
 	rm -f $(TARGET) triangle.exe
+endif
 
 # Phony targets
 .PHONY: all run clean
