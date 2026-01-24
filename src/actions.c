@@ -3841,7 +3841,6 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
                             insert_if_block_in_connection(popupMenu.connectionIndex);
                         } else if (selectedType == NODE_CYCLE) {
                             insert_cycle_block_in_connection(popupMenu.connectionIndex);
-                            // #endregion
                         } else {
                             insert_node_in_connection(popupMenu.connectionIndex, selectedType);
                         }
