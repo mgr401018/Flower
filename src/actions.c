@@ -381,26 +381,51 @@ void delete_node(int nodeIndex) {
             int cycleIdx = cycle->cycleNodeIndex;
             int endIdx = cycle->cycleEndNodeIndex;
             
-            // Find the connection coming into the cycle block
+            // Find the incoming/outgoing connections for reconnecting the flow after deletion.
+            //
+            // For WHILE/FOR:
+            //   incoming -> cycle -> body -> end -> outgoing
+            //
+            // For DO:
+            //   incoming -> end -> body -> cycle -> outgoing
+            //
+            // Note: DO loops have the cycle block at the bottom and the cycle_end at the top, and the
+            // non-loopback edges differ. We must not infer "incoming/outgoing" from fixed nodes.
             int incomingFromNode = -1;
-            for (int i = 0; i < connectionCount; i++) {
-                if (connections[i].toNode == cycleIdx && !is_cycle_loopback(i)) {
-                    incomingFromNode = connections[i].fromNode;
-                    break;
-                }
-            }
-            
-            // Find the connection going out of the cycle end
             int outgoingToNode = -1;
-            for (int i = 0; i < connectionCount; i++) {
-                if (connections[i].fromNode == endIdx && !is_cycle_loopback(i)) {
-                    outgoingToNode = connections[i].toNode;
-                    break;
+            if (cycle->cycleType == CYCLE_DO) {
+                // Incoming goes INTO the cycle_end (top). Loopback (cycle->end) is excluded.
+                for (int i = 0; i < connectionCount; i++) {
+                    if (connections[i].toNode == endIdx && !is_cycle_loopback(i)) {
+                        incomingFromNode = connections[i].fromNode;
+                        break;
+                    }
+                }
+                // Outgoing goes OUT OF the cycle node (bottom). Loopback (cycle->end) is excluded.
+                for (int i = 0; i < connectionCount; i++) {
+                    if (connections[i].fromNode == cycleIdx && !is_cycle_loopback(i)) {
+                        outgoingToNode = connections[i].toNode;
+                        break;
+                    }
+                }
+            } else {
+                // WHILE/FOR: incoming goes INTO the cycle node (top), outgoing goes OUT OF the cycle_end (bottom).
+                for (int i = 0; i < connectionCount; i++) {
+                    if (connections[i].toNode == cycleIdx && !is_cycle_loopback(i)) {
+                        incomingFromNode = connections[i].fromNode;
+                        break;
+                    }
+                }
+                for (int i = 0; i < connectionCount; i++) {
+                    if (connections[i].fromNode == endIdx && !is_cycle_loopback(i)) {
+                        outgoingToNode = connections[i].toNode;
+                        break;
+                    }
                 }
             }
             
-            // Find all nodes inside the cycle using BFS
-            // Start from cycle node's outgoing connections (body start), exclude loopback
+            // Find all nodes inside the cycle using BFS.
+            // For DO loops, the body starts from cycle_end; for WHILE/FOR, it starts from cycle.
             int nodesInside[MAX_NODES];
             int nodesInsideCount = 0;
             bool visited[MAX_NODES] = {false};
@@ -413,9 +438,9 @@ void delete_node(int nodeIndex) {
             int queue[MAX_NODES];
             int queueFront = 0, queueBack = 0;
             
-            // Start BFS from cycle node's outgoing connections (body start)
+            int bodyEntryNode = (cycle->cycleType == CYCLE_DO) ? endIdx : cycleIdx;
             for (int i = 0; i < connectionCount; i++) {
-                if (connections[i].fromNode == cycleIdx && !is_cycle_loopback(i)) {
+                if (connections[i].fromNode == bodyEntryNode && !is_cycle_loopback(i)) {
                     int bodyStart = connections[i].toNode;
                     if (bodyStart >= 0 && bodyStart < nodeCount && !visited[bodyStart]) {
                         queue[queueBack++] = bodyStart;
