@@ -4,7 +4,9 @@
 #include <stdbool.h>
 #include <math.h>
 #include <string.h>
-#ifndef _WIN32
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <unistd.h>
 #endif
 #include "flowchart_state.h"
@@ -1231,13 +1233,90 @@ void edit_node_value(int nodeIndex) {
             }
         }
         
-        const char* exprResult = tinyfd_inputBox(
+        // Call VBScript InputBox directly to bypass TINYFD_NOLIB console mode
+        // This ensures we get the GUI InputBox even when TINYFD_NOLIB is defined
+        const char* exprResult = NULL;
+#ifdef _WIN32
+        char vbsPath[512];
+        char tempPath[512];
+        char resultBuffer[MAX_VALUE_LENGTH] = "";
+        
+        snprintf(vbsPath, sizeof(vbsPath), "%s\\AppData\\Local\\Temp\\tinyfd_input.vbs", getenv("USERPROFILE"));
+        snprintf(tempPath, sizeof(tempPath), "%s\\AppData\\Local\\Temp\\tinyfd_input.txt", getenv("USERPROFILE"));
+        
+        // Create VBScript file
+        FILE* vbsFile = fopen(vbsPath, "w");
+        if (vbsFile) {
+            // Escape quotes in VBScript (use "" for a single quote)
+            char escapedExpr[MAX_VALUE_LENGTH * 2];  // Allow for doubled quotes
+            int j = 0;
+            for (int i = 0; currentExpr[i] != '\0' && j < sizeof(escapedExpr) - 1; i++) {
+                if (currentExpr[i] == '"') {
+                    escapedExpr[j++] = '"';
+                    escapedExpr[j++] = '"';
+                } else {
+                    escapedExpr[j++] = currentExpr[i];
+                }
+            }
+            escapedExpr[j] = '\0';
+            
+            // Write VBScript with proper quote escaping
+            // In VBScript, use "" to represent a single quote in a string
+            fprintf(vbsFile, "Dim result\r\n");
+            fprintf(vbsFile, "result = InputBox(\"Enter expression (e.g., 5, b, a + 1, \"\"hello\"\", arr[i]):\", \"Assignment Expression\", \"%s\")\r\n", escapedExpr);
+            fprintf(vbsFile, "If IsEmpty(result) Then\r\n");
+            fprintf(vbsFile, "  WScript.Echo 0\r\n");
+            fprintf(vbsFile, "Else\r\n");
+            fprintf(vbsFile, "  WScript.Echo \"1\" & result\r\n");
+            fprintf(vbsFile, "End If\r\n");
+            fclose(vbsFile);
+            
+            // Run VBScript
+            char cmd[1024];
+            snprintf(cmd, sizeof(cmd), "cscript.exe //Nologo \"%s\" > \"%s\"", vbsPath, tempPath);
+            system(cmd);
+            
+            // Read result
+            FILE* tempFile = fopen(tempPath, "r");
+            if (tempFile) {
+                if (fgets(resultBuffer, sizeof(resultBuffer), tempFile)) {
+                    resultBuffer[strcspn(resultBuffer, "\n")] = '\0';
+                    if (resultBuffer[0] == '1' && strlen(resultBuffer) > 1) {
+                        // Result starts with '1', extract the actual value
+                        exprResult = resultBuffer + 1;
+                        // Copy to a static buffer since resultBuffer is local
+                        static char exprResultBuffer[MAX_VALUE_LENGTH];
+                        strncpy(exprResultBuffer, exprResult, MAX_VALUE_LENGTH - 1);
+                        exprResultBuffer[MAX_VALUE_LENGTH - 1] = '\0';
+                        exprResult = exprResultBuffer;
+                    }
+                }
+                fclose(tempFile);
+                remove(tempPath);
+            }
+            remove(vbsPath);
+        }
+        
+        // If VBScript failed, fall back to tinyfd_inputBox
+        if (!exprResult || exprResult[0] == '\0') {
+            exprResult = tinyfd_inputBox(
+                "Assignment Expression",
+                "Enter expression (e.g., 5, b, a + 1, \"hello\", arr[i]):",
+                currentExpr
+            );
+        }
+#else
+        // Non-Windows: use standard tinyfd_inputBox
+        exprResult = tinyfd_inputBox(
             "Assignment Expression",
             "Enter expression (e.g., 5, b, a + 1, \"hello\", arr[i]):",
             currentExpr
         );
+#endif
         
-        if (!exprResult || exprResult[0] == '\0') return;
+        if (!exprResult || exprResult[0] == '\0') {
+            return;
+        }
         
         // Step 4 - Validate expression and check array bounds in expression
         VariableType actualType;
