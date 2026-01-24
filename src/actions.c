@@ -1488,11 +1488,85 @@ void edit_node_value(int nodeIndex) {
             currentFormat[MAX_VALUE_LENGTH - 1] = '\0';
         }
         
-        const char* formatResult = tinyfd_inputBox(
+        // Call VBScript InputBox directly to bypass TINYFD_NOLIB console mode
+        // This ensures we get the GUI InputBox even when TINYFD_NOLIB is defined
+        const char* formatResult = NULL;
+#ifdef _WIN32
+        char vbsPath[512];
+        char tempPath[512];
+        char resultBuffer[MAX_VALUE_LENGTH] = "";
+        
+        snprintf(vbsPath, sizeof(vbsPath), "%s\\AppData\\Local\\Temp\\tinyfd_output.vbs", getenv("USERPROFILE"));
+        snprintf(tempPath, sizeof(tempPath), "%s\\AppData\\Local\\Temp\\tinyfd_output.txt", getenv("USERPROFILE"));
+        
+        // Create VBScript file
+        FILE* vbsFile = fopen(vbsPath, "w");
+        if (vbsFile) {
+            // Escape quotes in VBScript (use "" for a single quote)
+            char escapedFormat[MAX_VALUE_LENGTH * 2];  // Allow for doubled quotes
+            int j = 0;
+            for (int i = 0; currentFormat[i] != '\0' && j < sizeof(escapedFormat) - 1; i++) {
+                if (currentFormat[i] == '"') {
+                    escapedFormat[j++] = '"';
+                    escapedFormat[j++] = '"';
+                } else {
+                    escapedFormat[j++] = currentFormat[i];
+                }
+            }
+            escapedFormat[j] = '\0';
+            
+            // Write VBScript with proper quote escaping
+            fprintf(vbsFile, "Dim result\r\n");
+            fprintf(vbsFile, "result = InputBox(\"Enter format string with variable placeholders (e.g., \"\"Hello {name}, value is {x}\"\" or \"\"Array[0] = {arr[i]}\"\"):\", \"Output Format String\", \"%s\")\r\n", escapedFormat);
+            fprintf(vbsFile, "If IsEmpty(result) Then\r\n");
+            fprintf(vbsFile, "  WScript.Echo 0\r\n");
+            fprintf(vbsFile, "Else\r\n");
+            fprintf(vbsFile, "  WScript.Echo \"1\" & result\r\n");
+            fprintf(vbsFile, "End If\r\n");
+            fclose(vbsFile);
+            
+            // Run VBScript
+            char cmd[1024];
+            snprintf(cmd, sizeof(cmd), "cscript.exe //Nologo \"%s\" > \"%s\"", vbsPath, tempPath);
+            system(cmd);
+            
+            // Read result
+            FILE* tempFile = fopen(tempPath, "r");
+            if (tempFile) {
+                if (fgets(resultBuffer, sizeof(resultBuffer), tempFile)) {
+                    resultBuffer[strcspn(resultBuffer, "\n")] = '\0';
+                    if (resultBuffer[0] == '1' && strlen(resultBuffer) > 1) {
+                        // Result starts with '1', extract the actual value
+                        formatResult = resultBuffer + 1;
+                        // Copy to a static buffer since resultBuffer is local
+                        static char formatResultBuffer[MAX_VALUE_LENGTH];
+                        strncpy(formatResultBuffer, formatResult, MAX_VALUE_LENGTH - 1);
+                        formatResultBuffer[MAX_VALUE_LENGTH - 1] = '\0';
+                        formatResult = formatResultBuffer;
+                    }
+                }
+                fclose(tempFile);
+                remove(tempPath);
+            }
+            remove(vbsPath);
+        }
+        
+        // If VBScript failed, fall back to tinyfd_inputBox
+        if (!formatResult || formatResult[0] == '\0') {
+            formatResult = tinyfd_inputBox(
+                "Output Format String",
+                "Enter format string with variable placeholders (e.g., \"Hello {name}, value is {x}\" or \"Array[0] = {arr[i]}\"):",
+                currentFormat
+            );
+        }
+#else
+        // Non-Windows: use standard tinyfd_inputBox
+        formatResult = tinyfd_inputBox(
             "Output Format String",
             "Enter format string with variable placeholders (e.g., \"Hello {name}, value is {x}\" or \"Array[0] = {arr[i]}\"):",
             currentFormat
         );
+#endif
         
         if (!formatResult || formatResult[0] == '\0') return;
         
@@ -3767,7 +3841,6 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
                             insert_if_block_in_connection(popupMenu.connectionIndex);
                         } else if (selectedType == NODE_CYCLE) {
                             insert_cycle_block_in_connection(popupMenu.connectionIndex);
-                            // #endregion
                         } else {
                             insert_node_in_connection(popupMenu.connectionIndex, selectedType);
                         }

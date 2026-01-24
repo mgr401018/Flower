@@ -1614,8 +1614,11 @@ void reposition_convergence_point(int ifBlockIndex, bool shouldPushNodesBelow) {
     int trueDepth = calculate_branch_depth(ifBlockIndex, 0);
     int falseDepth = calculate_branch_depth(ifBlockIndex, 1);
     
-    // If branches are equal depth and non-empty, don't move convergence
-    if (trueDepth == falseDepth && trueDepth > 0) {
+    // If branches are equal depth and non-empty, and we're not pushing nodes below,
+    // don't move convergence (this prevents unnecessary repositioning during load)
+    // However, when shouldPushNodesBelow is true (e.g., when adding a node), we should
+    // always recalculate based on actual positions to ensure proper expansion
+    if (trueDepth == falseDepth && trueDepth > 0 && !shouldPushNodesBelow) {
         return;
     }
     

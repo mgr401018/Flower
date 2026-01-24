@@ -1077,14 +1077,6 @@ static int export_node_recursive(FILE* file, int nodeIdx, FlowNode* nodes, int n
         }
         
         case NODE_CYCLE_END: {
-            // #region agent log
-            FILE* logFile = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-            if (logFile) {
-                fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"B\",\"location\":\"code_exporter.c:1079\",\"message\":\"Encountered NODE_CYCLE_END\",\"data\":{\"nodeIdx\":%d,\"visited\":%d},\"timestamp\":%ld}\n", nodeIdx, visited[nodeIdx] ? 1 : 0, (long)time(NULL));
-                fclose(logFile);
-            }
-            // #endregion
-            
             // Check if this cycle_end belongs to a DO loop
             // For DO loops, cycle_end is on top and should be processed first
             // Find the corresponding cycle node
@@ -1132,34 +1124,8 @@ static int export_node_recursive(FILE* file, int nodeIdx, FlowNode* nodes, int n
                 }
             }
             
-            // #region agent log
-            logFile = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-            if (logFile) {
-                fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"B\",\"location\":\"code_exporter.c:1100\",\"message\":\"Cycle node search result\",\"data\":{\"cycleNode\":%d,\"cycleEndIdx\":%d},\"timestamp\":%ld}\n", cycleNode, nodeIdx, (long)time(NULL));
-                // Log all connections involving this cycle_end
-                for (int i = 0; i < connectionCount; i++) {
-                    if (connections[i].fromNode == nodeIdx || connections[i].toNode == nodeIdx) {
-                        fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"B\",\"location\":\"code_exporter.c:1105\",\"message\":\"Connection involving cycle_end\",\"data\":{\"connIdx\":%d,\"from\":%d,\"to\":%d,\"fromType\":%d,\"toType\":%d},\"timestamp\":%ld}\n", 
-                            i, connections[i].fromNode, connections[i].toNode,
-                            (connections[i].fromNode >= 0 && connections[i].fromNode < nodeCount) ? nodes[connections[i].fromNode].type : -1,
-                            (connections[i].toNode >= 0 && connections[i].toNode < nodeCount) ? nodes[connections[i].toNode].type : -1,
-                            (long)time(NULL));
-                    }
-                }
-                fclose(logFile);
-            }
-            // #endregion
-            
             // If this is a DO loop's cycle_end, process the entire DO loop here
             if (cycleNode >= 0 && !visited[cycleNode]) {
-                // #region agent log
-                FILE* logFile = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-                if (logFile) {
-                    fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"A\",\"location\":\"code_exporter.c:1059\",\"message\":\"Processing DO loop from cycle_end\",\"data\":{\"cycleEndIdx\":%d,\"cycleNodeIdx\":%d},\"timestamp\":%ld}\n", nodeIdx, cycleNode, (long)time(NULL));
-                    fclose(logFile);
-                }
-                // #endregion
-                
                 // Mark cycle node as visited so it doesn't get processed separately
                 visited[cycleNode] = true;
                 
@@ -1198,14 +1164,6 @@ static int export_node_recursive(FILE* file, int nodeIdx, FlowNode* nodes, int n
                         break;
                     }
                 }
-                
-                // #region agent log
-                logFile = fopen("/home/mm1yscttck/Desktop/glfw_test/.cursor/debug.log", "a");
-                if (logFile) {
-                    fprintf(logFile, "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"A\",\"location\":\"code_exporter.c:1100\",\"message\":\"DO loop body start found\",\"data\":{\"bodyStart\":%d},\"timestamp\":%ld}\n", bodyStart, (long)time(NULL));
-                    fclose(logFile);
-                }
-                // #endregion
                 
                 // Export loop body
                 if (bodyStart >= 0) {
