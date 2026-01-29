@@ -4272,7 +4272,8 @@ char const * tinyfd_inputBox(
 			strcat(lDialogString, aMessage) ;
 			strcat(lDialogString, "\"") ;
 		}
-		if ( aDefaultInput && strlen(aDefaultInput) )
+		/* Only use password (--hide-text) when aDefaultInput is NULL; empty string "" should show visible entry */
+		if ( aDefaultInput )
 		{
 			strcat(lDialogString, " --entry-text=\"") ;
 			strcat(lDialogString, aDefaultInput) ;
