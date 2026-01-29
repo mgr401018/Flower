@@ -6,6 +6,7 @@
 
 void mouse_button_callback(GLFWwindow* window, int button, int action, int mods);
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods);
+void process_pending_file_actions(void);
 void edit_node_value(int nodeIndex);
 void insert_node_in_connection(int connIndex, NodeType nodeType);
 void insert_if_block_in_connection(int connIndex);

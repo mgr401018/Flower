@@ -2374,6 +2374,7 @@ int main(void) {
     glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
     
     while (!glfwWindowShouldClose(window)) {
+        process_pending_file_actions();
         glClear(GL_COLOR_BUFFER_BIT);
         
         // Set up viewport and projection matrix to account for aspect ratio

@@ -16,6 +16,75 @@
 #define TINYFD_NOLIB
 #include "../imports/tinyfiledialogs.h"
 
+/* Pending file dialog result: run dialogs on a worker thread so the main window
+   keeps processing events and doesn't go "not responding" on Windows. */
+enum { PENDING_NONE = 0, PENDING_SAVE, PENDING_LOAD, PENDING_EXPORT };
+static volatile int file_dialog_done = 0;
+static int pending_file_action = PENDING_NONE;
+static char pending_filename[1024];
+static char pending_export_lang[32];
+#ifdef _WIN32
+extern int tinyfd_listDialog(const char* aTitle, const char* aMessage, int numOptions, const char* const* options);
+static DWORD WINAPI file_dialog_thread(LPVOID param) {
+    int action = (int)(intptr_t)param;
+    const char* result = NULL;
+    if (action == PENDING_SAVE) {
+        const char* filters[] = {"*.txt", "*.flow"};
+        result = tinyfd_saveFileDialog("Save Flowchart", "flowchart.txt", 2, filters,
+            "Text Files (*.txt);;Flowchart Files (*.flow)");
+    } else if (action == PENDING_LOAD) {
+        const char* filters[] = {"*.txt", "*.flow"};
+        result = tinyfd_openFileDialog("Load Flowchart", "", 2, filters,
+            "Text Files (*.txt);;Flowchart Files (*.flow)", 0);
+    } else if (action == PENDING_EXPORT) {
+        const char* langOptions[] = {"C"};
+        int langChoice = tinyfd_listDialog("Select Programming Language",
+            "Choose the programming language:", 1, langOptions);
+        if (langChoice >= 0 && langChoice < 1) {
+            strncpy(pending_export_lang, "C", sizeof(pending_export_lang) - 1);
+            pending_export_lang[sizeof(pending_export_lang) - 1] = '\0';
+            const char* filters[] = {"*.c"};
+            result = tinyfd_saveFileDialog("Export Flowchart to Code", "output.c", 1, filters,
+                "C Source Files (*.c)");
+        }
+    }
+    if (result != NULL && strlen(result) > 0) {
+        pending_file_action = action;
+        strncpy(pending_filename, result, sizeof(pending_filename) - 1);
+        pending_filename[sizeof(pending_filename) - 1] = '\0';
+    } else {
+        pending_file_action = PENDING_NONE;
+    }
+    file_dialog_done = 1;
+    return 0;
+}
+
+static void run_file_dialog_async(int action) {
+    HANDLE th = CreateThread(NULL, 0, file_dialog_thread, (LPVOID)(intptr_t)action, 0, NULL);
+    if (th) CloseHandle(th);
+}
+#endif
+
+void process_pending_file_actions(void) {
+    if (!file_dialog_done) return;
+    file_dialog_done = 0;
+    if (pending_file_action == PENDING_SAVE) {
+        pending_file_action = PENDING_NONE;
+        save_flowchart(pending_filename);
+    } else if (pending_file_action == PENDING_LOAD) {
+        pending_file_action = PENDING_NONE;
+        load_flowchart(pending_filename);
+    } else if (pending_file_action == PENDING_EXPORT) {
+        pending_file_action = PENDING_NONE;
+        if (export_to_code(pending_filename, pending_export_lang, nodes, nodeCount,
+                (struct Connection*)connections, connectionCount)) {
+            tinyfd_messageBox("Export Success", "Flowchart exported successfully!", "ok", "info", 1);
+        } else {
+            tinyfd_messageBox("Export Error", "Failed to export flowchart. Check console for details.", "ok", "error", 1);
+        }
+    }
+}
+
 // Forward declarations for helper functions (defined in main.c)
 void rebuild_variable_table(void);
 int get_if_branch_type(int connIndex);
@@ -3725,32 +3794,31 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
             return;
         }
         if (cursor_over_button(buttonX_scaled, saveButtonY, window)) {
-            // Blue save button clicked - open save dialog
+#ifdef _WIN32
+            run_file_dialog_async(PENDING_SAVE);
+#else
             const char* filters[] = {"*.txt", "*.flow"};
             const char* filename = tinyfd_saveFileDialog(
-                "Save Flowchart",
-                "flowchart.txt",
-                2, filters,
-                "Text Files (*.txt);;Flowchart Files (*.flow)"
-            );
+                "Save Flowchart", "flowchart.txt", 2, filters,
+                "Text Files (*.txt);;Flowchart Files (*.flow)");
             if (filename != NULL && strlen(filename) > 0) {
                 save_flowchart(filename);
             }
+#endif
             return;
         }
         if (cursor_over_button(buttonX_scaled, loadButtonY, window)) {
-            // Yellow load button clicked - open load dialog
+#ifdef _WIN32
+            run_file_dialog_async(PENDING_LOAD);
+#else
             const char* filters[] = {"*.txt", "*.flow"};
             const char* filename = tinyfd_openFileDialog(
-                "Load Flowchart",
-                "",
-                2, filters,
-                "Text Files (*.txt);;Flowchart Files (*.flow)",
-                0
-            );
+                "Load Flowchart", "", 2, filters,
+                "Text Files (*.txt);;Flowchart Files (*.flow)", 0);
             if (filename != NULL && strlen(filename) > 0) {
                 load_flowchart(filename);
             }
+#endif
             return;
         }
         if (cursor_over_button(buttonX_scaled, closeButtonY, window)) {
@@ -3769,26 +3837,18 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
             return;
         }
         if (cursor_over_button(buttonX_scaled, exportButtonY, window)) {
-            // Export button clicked - show language selection and export
+#ifdef _WIN32
+            run_file_dialog_async(PENDING_EXPORT);
+#else
             const char* langOptions[] = {"C"};
-            int langChoice = tinyfd_listDialog("Select Programming Language", 
+            int langChoice = tinyfd_listDialog("Select Programming Language",
                 "Choose the programming language:", 1, langOptions);
-            
-            if (langChoice < 0 || langChoice >= 1) {
-                return; // User cancelled or invalid
-            }
-            
+            if (langChoice < 0 || langChoice >= 1) return;
             const char* langName = "C";
-            
-            // Open file save dialog
             const char* filters[] = {"*.c"};
             const char* filename = tinyfd_saveFileDialog(
-                "Export Flowchart to Code",
-                "output.c",
-                1, filters,
-                "C Source Files (*.c)"
-            );
-            
+                "Export Flowchart to Code", "output.c", 1, filters,
+                "C Source Files (*.c)");
             if (filename != NULL && strlen(filename) > 0) {
                 if (export_to_code(filename, langName, nodes, nodeCount, (struct Connection*)connections, connectionCount)) {
                     tinyfd_messageBox("Export Success", "Flowchart exported successfully!", "ok", "info", 1);
@@ -3796,6 +3856,7 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
                     tinyfd_messageBox("Export Error", "Failed to export flowchart. Check console for details.", "ok", "error", 1);
                 }
             }
+#endif
             return;
         }
         
