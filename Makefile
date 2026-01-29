@@ -19,7 +19,7 @@ BUILD_DIR = build
 IMPORTS_DIR = imports
 
 # Target executable name
-TARGET = triangle
+TARGET = flower
 
 # Source files
 SRCS = main.c \
@@ -52,7 +52,7 @@ ifeq ($(UNAME_S),Darwin)
 endif
 
 ifeq ($(UNAME_S),Windows)
-    TARGET = triangle.exe
+    TARGET = flower.exe
     #LIBS = -lglfw3 -lopengl32 -lgdi32
     LIBS = -lglfw3 -lopengl32 -lgdi32 -lole32 -lcomdlg32 -loleaut32
 endif
@@ -122,10 +122,10 @@ clean:
 ifeq ($(UNAME_S),Windows)
 	if exist "$(BUILD_DIR)" rmdir /S /Q "$(BUILD_DIR)"
 	if exist "$(TARGET)" del /Q "$(TARGET)"
-	if exist "triangle.exe" del /Q "triangle.exe"
+	if exist "flower.exe" del /Q "flower.exe"
 else
 	rm -rf $(BUILD_DIR)
-	rm -f $(TARGET) triangle.exe
+	rm -f $(TARGET) flower.exe
 endif
 
 # Phony targets
