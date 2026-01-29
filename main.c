@@ -284,8 +284,8 @@ void cursor_position_callback(GLFWwindow* window, double xpos, double ypos) {
 // Scroll callback for panning (both horizontal and vertical)
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
     (void)window;   // Mark as intentionally unused
-    scrollOffsetX += xoffset * 0.1;  // Smooth horizontal scrolling factor
-    scrollOffsetY -= yoffset * 0.1;  // Smooth vertical scrolling factor (flipped)
+    scrollOffsetX -= xoffset * 0.1;  // Smooth horizontal scrolling factor
+    scrollOffsetY += yoffset * 0.1;  // Smooth vertical scrolling factor
 }
 
 // Check if cursor is over a menu item (deprecated - menu width is now dynamic)
